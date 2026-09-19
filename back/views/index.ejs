@@ -1,0 +1,39 @@
+<%- include('partials/head') %>
+<p class="muted">Convert playlists, liked tracks, and albums from Yandex Music into YouTube Music links.</p>
+<% if (!settings.yandexToken) { %>
+<p class="badge uncertain">No YANDEX_TOKEN — only public playlists/albums will work.</p>
+<% } %>
+
+<form method="post" action="/migrate">
+  <div class="row">
+    <div style="flex:0 0 14rem">
+      <label for="mode">Mode</label><br>
+      <select name="mode" id="mode" onchange="switchMode(this.value)">
+        <option value="playlist">Playlist (URL)</option>
+        <option value="album">Album (URL)</option>
+        <option value="liked">Liked tracks (user)</option>
+        <option value="saved-albums">Saved albums (user)</option>
+        <option value="all-playlists">All playlists (user)</option>
+      </select>
+    </div>
+    <div style="flex:1">
+      <label for="source">Source</label><br>
+      <input type="text" name="source" id="source" placeholder="https://music.yandex.ru/users/&lt;user&gt;/playlists/&lt;kind&gt;">
+    </div>
+  </div>
+  <button type="submit">Convert →</button>
+</form>
+
+<script>
+const hints = {
+  playlist: "https://music.yandex.ru/users/<user>/playlists/<kind>",
+  album: "https://music.yandex.ru/album/<id>",
+  liked: "<yandex-username> (needs YANDEX_TOKEN)",
+  saved-albums: "<yandex-username> (needs YANDEX_TOKEN)",
+  all-playlists: "<yandex-username> (needs YANDEX_TOKEN)",
+};
+function switchMode(m) { document.getElementById('source').placeholder = hints[m]; }
+</script>
+
+<p><a href="/jobs">Job history</a></p>
+<%- include('partials/tail') %>
