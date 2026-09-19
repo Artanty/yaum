@@ -57,7 +57,8 @@ Servers that cannot reach YouTube directly (e.g. in Russia) set
 
 ```bash
 npm run dev              # tsx dev mode
-npm run build && npm start   # production
+npm start                # tsx src/server.ts — no build step, works on bare npm install
+npm run build && node dist/server.js   # optional compiled build
 # open http://<host>:8000
 ```
 

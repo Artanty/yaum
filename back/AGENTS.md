@@ -14,7 +14,7 @@ Originally built in Python (FastAPI + yandex-music + ytmusicapi); **fully rewrit
 npm test                 # vitest (19 tests: url, matcher, db, pipeline-with-mocks)
 npm run lint             # tsc --noEmit
 npm run build            # tsc -> dist/
-npm start                # node dist/server.js (HOST/PORT env, default 0.0.0.0:8000)
+npm start                # tsx src/server.ts (no build step; HOST/PORT env, default 0.0.0.0:8000)
 npm run dev              # tsx src/server.ts
 npx tsx src/cli.ts match <yandex-url>   # CLI dry-run, prints link report
 ```
@@ -76,6 +76,7 @@ Match status: `matched` (score ≥ MATCH_ACCEPT 0.75) / `uncertain` (≥ 0.55) /
 
 ## Conventions & gotchas
 - ESM + TS NodeNext: **relative imports need `.js` extensions** (`./config.js`) in `src/`.
+- `npm start` runs `tsx src/server.ts` — the render.yaml deploy is `npm install` + `npm run start` with **no build step**, so `dist/` is optional there. `tsx` is a runtime dependency by design (survives `NODE_ENV=production` installs).
 - `src/server.ts` starts listening only when run directly (`node dist/server.js` / `tsx src/server.ts` / `MUSH_RUN=1`); `buildApp(store)` is exported so tests could import it — tests currently don't need a server.
 - Views resolved from `process.cwd()/views` — run server from repo root.
 - Pipeline is testable by passing `{fetchCollections, searchSongs}` fakes as `PipelineDeps` — keep this pattern; no network in tests.

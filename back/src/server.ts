@@ -1,4 +1,4 @@
-import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
 import formbody from '@fastify/formbody';
 import view from '@fastify/view';
@@ -8,12 +8,14 @@ import { openStore, type Store } from './db.js';
 import { startJob } from './pipeline.js';
 import { fromForm } from './url.js';
 
+const viewsRoot = fileURLToPath(new URL('../views/', import.meta.url));
+
 export function buildApp(store: Store) {
   const app = Fastify({ logger: false });
   app.register(formbody);
   app.register(view, {
     engine: { ejs },
-    root: path.join(process.cwd(), 'views'),
+    root: viewsRoot,
   });
 
   app.get('/', async (_req, reply) => {
