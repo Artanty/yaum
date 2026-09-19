@@ -24,14 +24,21 @@ score *= 0.3 if |duration difference| is outside tolerance
 * `MATCH_UNCERTAIN <= score < MATCH_ACCEPT` → **uncertain** (shown, flagged)
 * below → **not_found**
 
-Matches are cached in SQLite, so re-runs after a failure don't re-search.
+Matches are cached in **MySQL**, so re-runs after a failure don't re-search.
 
 ## Setup
 
+Requires Node ≥ 20.18 (`.nvmrc` pins 20; `nvm use` if you use nvm).
+
 ```bash
 npm install
-cp .env.example .env     # optional: fill secrets/tuning
+cp .env.example .env     # fill secrets/tuning (see below)
 ```
+
+The app persists jobs, per-track results, and the match cache in **MySQL**.
+Configure it in `.env` with the individual parts `DB_HOST`, `DB_PORT`
+(3306), `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD`. Tables are created
+automatically on startup.
 
 ### Yandex token (optional — public playlists/albums work without it)
 
@@ -51,15 +58,11 @@ Servers that cannot reach YouTube directly (e.g. in Russia) set
 ```bash
 npm run dev              # tsx dev mode
 npm run build && npm start   # production
-# open http://127.0.0.1:8000
+# open http://<host>:8000
 ```
 
-Docker:
-
-```bash
-docker build -t mush .
-docker run -p 8000:8000 -v $PWD/secrets:/data --env-file .env mush
-```
+Bind to `0.0.0.0` (default) so the platform health check can reach the app;
+override with `HOST` if needed.
 
 ## CLI dry-run (prints links, writes nothing)
 
@@ -90,6 +93,7 @@ npm test
 ## Notes
 
 * Both APIs are unofficial; versions are pinned in `package.json`. If a
-  migration fails, check `mush.db` — per-track results survive restarts.
+  migration fails, check the `jobs` table in MySQL — per-track results
+  survive restarts.
 * If the server can't reach YouTube, searches time out after `YTM_TIMEOUT`
   (default 20 s) and retry ×3, then the track is reported `not_found`.

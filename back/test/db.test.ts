@@ -1,17 +1,13 @@
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { Store } from '../src/db.js';
+import { makeStore } from './mysql.js';
 
 describe('Store lifecycle', () => {
-  it('creates jobs, items, cache entries', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mush-test-'));
-    const store = new Store(path.join(dir, 't.db'));
-    const jobId = store.createJob('playlist', 'some url');
-    store.setJob(jobId, { status: 'running' });
-    store.addTotal(jobId, 2);
-    store.addItems([
+  it('creates jobs, items, cache entries', async () => {
+    const store = await makeStore();
+    const jobId = await store.createJob('playlist', 'some url');
+    await store.setJob(jobId, { status: 'running' });
+    await store.addTotal(jobId, 2);
+    await store.addItems([
       {
         job_id: jobId, collection_idx: 0, position: 0, src_title: 'Title', src_artist: 'Artist',
         src_duration: 100, status: 'matched', score: 0.9, yt_video_id: 'vid', yt_title: 'YT Title',
@@ -23,23 +19,23 @@ describe('Store lifecycle', () => {
         yt_artist: null, yt_duration: null, collection_title: 'P',
       },
     ]);
-    store.incProcessed(jobId);
-    store.incProcessed(jobId);
-    store.setJob(jobId, { status: 'done' });
+    await store.incProcessed(jobId);
+    await store.incProcessed(jobId);
+    await store.setJob(jobId, { status: 'done' });
 
-    const job = store.getJob(jobId)!;
-    expect(job.status).toBe('done');
-    expect(job.processed).toBe(2);
-    expect(job.total).toBe(2);
+    const job = await store.getJob(jobId);
+    expect(job!.status).toBe('done');
+    expect(job!.processed).toBe(2);
+    expect(job!.total).toBe(2);
 
-    const items = store.jobItems(jobId);
+    const items = await store.jobItems(jobId);
     expect(items.length).toBe(2);
     expect(items[0].yt_video_id).toBe('vid');
 
-    store.cachePut('k', 'vid', 'YT Title', 'YT Artist', 100, 0.9);
-    expect(store.cacheGet('k')!.video_id).toBe('vid');
+    await store.cachePut('k', 'vid', 'YT Title', 'YT Artist', 100, 0.9);
+    expect((await store.cacheGet('k'))!.video_id).toBe('vid');
 
-    expect(store.getJob('missing')).toBeNull();
-    expect(store.listJobs()[0].id).toBe(jobId);
+    expect(await store.getJob('missing')).toBeNull();
+    expect((await store.listJobs())[0].id).toBe(jobId);
   });
 });

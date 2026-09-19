@@ -1,10 +1,7 @@
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { Store } from '../src/db.js';
 import { runJob, type PipelineDeps } from '../src/pipeline.js';
 import type { Candidate, Collection } from '../src/model.js';
+import { makeStore } from './mysql.js';
 
 function makeCollections(): Collection[] {
   return [
@@ -38,24 +35,23 @@ function fakeDeps(): PipelineDeps {
 
 describe('pipeline full job (mocked)', () => {
   it('matches, dedupes, reports, and caches', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mush-job-'));
-    const store = new Store(path.join(dir, 'job.db'));
+    const store = await makeStore();
     const deps = fakeDeps();
 
-    const jobId = store.createJob('album', 'https://music.yandex.ru/album/1');
+    const jobId = await store.createJob('album', 'https://music.yandex.ru/album/1');
     await runJob(store, jobId, 'album', 'https://music.yandex.ru/album/1', deps);
 
-    const job = store.getJob(jobId)!;
-    expect(job.status).toBe('done');
-    expect(job.error).toBeNull();
+    const job = await store.getJob(jobId);
+    expect(job!.status).toBe('done');
+    expect(job!.error).toBeNull();
 
-    const summary = JSON.parse(job.summary_json!);
+    const summary = JSON.parse(job!.summary_json!);
     expect(summary[0].matched).toBe(2);
     expect(summary[0].skipped_dup).toBe(1);
     expect(summary[0].not_found).toBe(1);
     expect(summary[0].links).toBe(2);
 
-    const items = store.jobItems(jobId);
+    const items = await store.jobItems(jobId);
     expect(items.map((i) => i.status)).toEqual(['matched', 'skipped_dup', 'matched', 'not_found']);
 
     // second run: A and B resolved from cache without new searches
@@ -67,12 +63,12 @@ describe('pipeline full job (mocked)', () => {
         return deps.searchSongs(q);
       },
     };
-    const job2 = store.createJob('album', 'https://music.yandex.ru/album/1');
+    const job2 = await store.createJob('album', 'https://music.yandex.ru/album/1');
     await runJob(store, job2, 'album', 'https://music.yandex.ru/album/1', countingDeps);
-    expect(store.getJob(job2)!.status).toBe('done');
+    expect((await store.getJob(job2))!.status).toBe('done');
     // missing song has no cached match -> still searches; A/B must not be searched
     expect(searches).toBeLessThan(6);
-    const items2 = store.jobItems(job2);
+    const items2 = await store.jobItems(job2);
     expect(items2.map((i) => i.status)).toEqual(['matched', 'skipped_dup', 'matched', 'not_found']);
   });
 });

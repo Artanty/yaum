@@ -4,7 +4,7 @@ import formbody from '@fastify/formbody';
 import view from '@fastify/view';
 import ejs from 'ejs';
 import { settings } from './config.js';
-import { Store } from './db.js';
+import { openStore, type Store } from './db.js';
 import { startJob } from './pipeline.js';
 import { fromForm } from './url.js';
 
@@ -29,19 +29,19 @@ export function buildApp(store: Store) {
     } catch (err) {
       return reply.code(400).type('text/plain').send(err instanceof Error ? err.message : String(err));
     }
-    const id = startJob(store, mode, source);
+    const id = await startJob(store, mode, source);
     return reply.code(303).header('location', `/job/${id}`).send();
   });
 
   app.get('/jobs', async (_req, reply) => {
-    return reply.view('jobs.ejs', { jobs: store.listJobs() });
+    return reply.view('jobs.ejs', { jobs: await store.listJobs() });
   });
 
   app.get('/job/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const job = store.getJob(id);
+    const job = await store.getJob(id);
     if (!job) return reply.code(404).type('text/plain').send('job not found');
-    const items = store.jobItems(id);
+    const items = await store.jobItems(id);
     const query = req.query as Record<string, string>;
 
     if (query.format === 'json') {
@@ -83,10 +83,10 @@ export function buildApp(store: Store) {
   return app;
 }
 
-const store = new Store(settings.dbPath);
+const store = await openStore();
 const app = buildApp(store);
 
-const host = process.env.HOST ?? '127.0.0.1';
+const host = settings.host;
 const port = Number(process.env.PORT ?? 8000);
 
 if (process.argv[1]?.endsWith('server.ts') || process.argv[1]?.endsWith('server.js') || process.env.MUSH_RUN === '1') {

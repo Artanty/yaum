@@ -31,7 +31,7 @@ export async function matchWithSearch(
   queue: PQueue,
 ): Promise<MatchResult> {
   const key = cacheKey(track);
-  const cached = store.cacheGet(key);
+  const cached = await store.cacheGet(key);
   if (cached?.video_id) {
     return {
       status: cached.score >= settings.matchAccept ? 'matched' : 'uncertain',
@@ -65,7 +65,7 @@ export async function matchWithSearch(
 
   if (!best) best = { status: 'not_found', score: 0 };
   if (best.videoId) {
-    store.cachePut(key, best.videoId, best.ytTitle ?? '', best.ytArtist ?? '', best.ytDuration ?? null, best.score);
+    await store.cachePut(key, best.videoId, best.ytTitle ?? '', best.ytArtist ?? '', best.ytDuration ?? null, best.score);
   }
   return best;
 }
@@ -85,7 +85,7 @@ export async function runCollection(
   queue: PQueue,
 ): Promise<Record<string, unknown>> {
   const tracks = coll.tracks;
-  store.addTotal(jobId, tracks.length);
+  await store.addTotal(jobId, tracks.length);
 
   const seen = new Set<string>();
   const results: ResultRow[] = [];
@@ -99,7 +99,7 @@ export async function runCollection(
     seen.add(key);
     const res = await matchWithSearch(store, track, deps, queue);
     results.push({ position, track, res });
-    store.incProcessed(jobId);
+    await store.incProcessed(jobId);
   }
 
   const rows = results.map(({ position, track, res }) => ({
@@ -117,7 +117,7 @@ export async function runCollection(
     yt_duration: res.ytDuration ?? null,
     collection_title: coll.title,
   }));
-  store.addItems(rows);
+  await store.addItems(rows);
 
   const usable = new Set(
     results
@@ -137,7 +137,7 @@ export async function runCollection(
 
 export async function runJob(store: Store, jobId: string, mode: string, source: string, deps: PipelineDeps = defaultDeps): Promise<void> {
   try {
-    store.setJob(jobId, { status: 'running' });
+    await store.setJob(jobId, { status: 'running' });
     const target = fromForm(mode, source);
     const collections = await deps.fetchCollections(target);
     const queue = new PQueue({ concurrency: settings.searchConcurrency });
@@ -147,15 +147,15 @@ export async function runJob(store: Store, jobId: string, mode: string, source: 
       if (!coll.tracks.length) continue;
       summaries.push(await runCollection(store, jobId, idx++, coll, deps, queue));
     }
-    store.setJob(jobId, { status: 'done', summary_json: JSON.stringify(summaries) });
+    await store.setJob(jobId, { status: 'done', summary_json: JSON.stringify(summaries) });
   } catch (err) {
     console.error(`job ${jobId} failed:`, err);
-    store.setJob(jobId, { status: 'failed', error: err instanceof Error ? err.message : String(err) });
+    await store.setJob(jobId, { status: 'failed', error: err instanceof Error ? err.message : String(err) });
   }
 }
 
-export function startJob(store: Store, mode: string, source: string, deps: PipelineDeps = defaultDeps): string {
-  const id = store.createJob(mode, source);
+export async function startJob(store: Store, mode: string, source: string, deps: PipelineDeps = defaultDeps): Promise<string> {
+  const id = await store.createJob(mode, source);
   void runJob(store, id, mode, source, deps);
   return id;
 }

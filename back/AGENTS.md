@@ -14,7 +14,7 @@ Originally built in Python (FastAPI + yandex-music + ytmusicapi); **fully rewrit
 npm test                 # vitest (19 tests: url, matcher, db, pipeline-with-mocks)
 npm run lint             # tsc --noEmit
 npm run build            # tsc -> dist/
-npm start                # node dist/server.js (HOST/PORT env, default 127.0.0.1:8000)
+npm start                # node dist/server.js (HOST/PORT env, default 0.0.0.0:8000)
 npm run dev              # tsx src/server.ts
 npx tsx src/cli.ts match <yandex-url>   # CLI dry-run, prints link report
 ```
@@ -24,11 +24,11 @@ Not a git repo (no commits/PRs unless the user initializes one).
 ## File map
 
 ```
-src/config.ts          env settings (dotenv): tokens, proxies, thresholds, DB path
+src/config.ts          env settings (dotenv): tokens, proxies, thresholds, MySQL connection
 src/model.ts           TrackMeta / MatchResult / Candidate / Collection + helpers
 src/url.ts             Yandex URL parser + modes: playlist|album|liked|saved-albums|all-playlists
 src/matcher.ts         normalize/transliterate/queries/WRatio scoring (ported from Python original)
-src/db.ts              better-sqlite3 Store: jobs / items / match_cache (WAL, sync API)
+src/db.ts              mysql2 Store: jobs / items / match_cache (MySQL, async API)
 src/pipeline.ts        job runner: runJob/runCollection/matchWithSearch/startJob; deps injection via PipelineDeps
 src/yandex/client.ts   hand-rolled Yandex HTTP client (undici fetch) + fetchCollections + trackMeta
 src/ytmusic/search.ts  ytmusic-api singleton wrapper: searchSongs -> Candidate[], retry + axios timeout setup
@@ -36,8 +36,7 @@ src/server.ts          Fastify app (buildApp exported for tests) + startup guard
 src/cli.ts             match dry-run CLI
 views/*.ejs            3 pages (index/job/jobs) + partials/head.ejs, partials/tail.ejs
 scripts/get_yandex_token.mjs  one-time Yandex OAuth Device Flow token fetch (public app creds inside)
-test/*.test.ts         vitest suites; pipeline test passes fake PipelineDeps (no network)
-Dockerfile             node:24-slim, npm ci --omit=dev, runs dist/server.js, /data volume for DB
+test/*.test.ts         vitest suites; DB tests run against local MySQL (brew), one throwaway schema each
 ```
 
 ## Data flow
@@ -73,16 +72,16 @@ Match status: `matched` (score ≥ MATCH_ACCEPT 0.75) / `uncertain` (≥ 0.55) /
 ### Environment quirks (this dev box)
 - Node v24 + npm 11 present; npm registry reachable. Python 3.10 exists but system python has **no ensurepip** (use `~/.local/bin/virtualenv` if python tooling ever needed).
 - Server smoke-test pattern: `PORT=xxxx nohup node dist/server.js >log 2>&1 & echo $! >pid` then curl, `kill $(cat pid)`. Avoid `pkill -f <pattern>` where the pattern matches the command itself (it killed its own shell once).
-- `mush.db*` files appear in repo root from dev runs (gitignored; SQLite WAL mode — never delete while server runs).
+- `mush.db*` SQLite files may linger from old dev runs (gitignored). The app now stores everything in **MySQL** (see `.env`: `DB_HOST`/`DB_PORT` (3306)/`DB_DATABASE`/`DB_USERNAME`/`DB_PASSWORD`); tables auto-create on startup via `openStore()`. Local MySQL (`brew services start mysql`, root/no password) is used by the test suite (`test/mysql.ts` creates a throwaway `mush_test_*` database).
 
 ## Conventions & gotchas
 - ESM + TS NodeNext: **relative imports need `.js` extensions** (`./config.js`) in `src/`.
 - `src/server.ts` starts listening only when run directly (`node dist/server.js` / `tsx src/server.ts` / `MUSH_RUN=1`); `buildApp(store)` is exported so tests could import it — tests currently don't need a server.
-- Views resolved from `process.cwd()/views` — run server from repo root (Docker WORKDIR handles it).
+- Views resolved from `process.cwd()/views` — run server from repo root.
 - Pipeline is testable by passing `{fetchCollections, searchSongs}` fakes as `PipelineDeps` — keep this pattern; no network in tests.
 - Fastify v5: reply.view via `@fastify/view` with `engine: { ejs }` (object form); pass all template vars through `reply.view(name, data)` (no `global` option in v11).
 - Jobs run in-process (`startJob` fire-and-forget); a restart abandons `running` jobs (match_cache makes re-runs cheap). No auth/rate limiting — designed for admin-run deployment.
-- Tuning envs: `MATCH_ACCEPT`, `MATCH_UNCERTAIN`, `DURATION_TOLERANCE`, `SEARCH_CONCURRENCY`, `YTM_TIMEOUT` (ms!), `YTM_PROXY`, `YANDEX_PROXY`, `YANDEX_TOKEN`, `DB_PATH`. Note `YTM_TIMEOUT` is **milliseconds** (default 20000).
+- Tuning envs: `MATCH_ACCEPT`, `MATCH_UNCERTAIN`, `DURATION_TOLERANCE`, `SEARCH_CONCURRENCY`, `YTM_TIMEOUT` (ms!), `YTM_PROXY`, `YANDEX_PROXY`, `YANDEX_TOKEN`, `HOST`; DB via `DB_HOST`/`DB_PORT` (3306)/`DB_DATABASE`/`DB_USERNAME`/`DB_PASSWORD`. Note `YTM_TIMEOUT` is **milliseconds** (default 20000).
 
 ## Verifying changes
 1. `npm test` (must stay green; 19 tests) and `npm run lint`.
