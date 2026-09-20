@@ -6,6 +6,7 @@ const CLIENT_ID = '23cabbbdc6cd418abb4b39c32c41195d';
 const CLIENT_SECRET = '53bc75238f0c4d08a118e51fe9203300';
 const OAUTH_BASE = 'https://oauth.yandex.ru';
 
+
 function randomDeviceId() {
   const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   return Array.from({ length: 10 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
