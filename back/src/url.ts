@@ -46,6 +46,13 @@ export function parseUrl(url: string): YandexTarget {
 
 export function fromForm(mode: string, source: string): YandexTarget {
   source = source.trim();
+  const bareShare = /^lk\.[0-9a-fA-F-]{36}$/.exec(source)
+    || /\/(lk\.[0-9a-fA-F-]{36})[\/?#]?/.exec(source.split('music.yandex')[1] ?? '');
+  if (bareShare?.[1] || /^lk\.[0-9a-fA-F-]{36}$/.test(source)) {
+    const token = bareShare?.[1] ?? source;
+    logger.log('url: share token routed to playlist', { shareToken: token, requestedMode: mode });
+    return { mode: 'playlist', user: null, shareToken: token, url: source };
+  }
   if (mode === 'playlist') {
     const t = parseUrl(source);
     if (t.mode !== 'playlist') {
