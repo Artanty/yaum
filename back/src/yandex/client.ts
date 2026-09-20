@@ -52,6 +52,12 @@ export class YandexClient {
     return this.request(`/users/${encodeURIComponent(user)}/playlists/${encodeURIComponent(kind)}`);
   }
 
+  // share links: https://music.yandex.ru/playlists/lk.<token> resolve anonymously to the
+  // underlying playlist (full track list included) via /playlist/<token>
+  playlistShare(token: string): Promise<any> {
+    return this.request(`/playlist/${encodeURIComponent(token)}`);
+  }
+
   playlistsList(user: string): Promise<any[]> {
     return this.request(`/users/${encodeURIComponent(user)}/playlists/list`);
   }
@@ -122,7 +128,9 @@ function expandTracks(rawTracks: any[], client: YandexClient): Promise<TrackMeta
 
 export async function fetchCollections(target: YandexTarget, client: YandexClient): Promise<Collection[]> {
   if (target.mode === 'playlist') {
-    const pl = await client.playlist(target.kind!, target.user!);
+    const pl = target.shareToken
+      ? await client.playlistShare(target.shareToken)
+      : await client.playlist(target.kind!, target.user!);
     if (!pl) throw new Error('playlist not found or not accessible');
     const metas = await expandTracks(pl.tracks ?? [], client);
     return [{ title: pl.title ?? 'Playlist', sourceUrl: target.url ?? null, tracks: metas }];

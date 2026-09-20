@@ -27,6 +27,15 @@ describe('parseUrl', () => {
     expect(t.kind).toBe('7');
   });
 
+  it('parses shared playlist URLs (lk.<token>)', () => {
+    const t = parseUrl(
+      'https://music.yandex.ru/playlists/lk.7c39432a-7d1d-47b3-8e81-9af76cad4e65?utm_source=web&utm_medium=copy_link',
+    );
+    expect(t.mode).toBe('playlist');
+    expect(t.shareToken).toBe('lk.7c39432a-7d1d-47b3-8e81-9af76cad4e65');
+    expect(t.user).toBeNull();
+  });
+
   it('rejects unsupported URLs', () => {
     expect(() => parseUrl('https://example.com/x')).toThrow(/unsupported/);
   });
