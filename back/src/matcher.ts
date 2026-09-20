@@ -2,6 +2,7 @@ import { WRatio } from 'fuzzball';
 import { settings } from './config.js';
 import { artistStr } from './model.js';
 import type { Candidate, MatchResult, MatchStatus, TrackMeta } from './model.js';
+import { logger } from './lib/logger.js';
 
 const BRACKET_RE = /[\(\[\{][^\)\]\}]*[\)\]\}]/g;
 const NOISE_RE =
@@ -104,11 +105,13 @@ export function matchTrack(track: TrackMeta, candidates: Candidate[]): MatchResu
     }
   }
   if (best === null) {
+    logger.log('matchTrack: no candidates', { title: track.title });
     return { status: 'not_found', score: 0 };
   }
   if (best.score >= settings.matchAccept) best.status = 'matched';
   else if (best.score >= settings.matchUncertain) best.status = 'uncertain';
   else best.status = 'not_found';
+  logger.log(`matchTrack: "${track.title}" -> ${best.status} (score ${best.score.toFixed(2)})`, { title: track.title, status: best.status, score: best.score, videoId: best.videoId });
   return best;
 }
 

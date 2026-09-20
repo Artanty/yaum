@@ -7,11 +7,46 @@ import { settings } from './config.js';
 import { openStore, type Store } from './db.js';
 import { startJob } from './pipeline.js';
 import { fromForm } from './url.js';
+import { logger } from './lib/logger.js';
+
+
 
 const viewsRoot = fileURLToPath(new URL('../views/', import.meta.url));
 
+const apiPrefix = process.env.API_PREFIX ?? '/api';
+
 export function buildApp(store: Store) {
   const app = Fastify({ logger: false });
+  const healthEnvs = {
+    YANDEX_TOKEN: Boolean(settings.yandexToken),
+    YTM_PROXY: Boolean(settings.ytmProxy),
+    LOG_DISABLED: Boolean(process.env.LOG_DISABLED),
+  };
+  const requestLogSkipPrefixes = [`${apiPrefix}/get-updates`];
+
+  app.addHook('preHandler', async (request) => {
+    try {
+      if (requestLogSkipPrefixes.some((prefix) => request.url.startsWith(prefix))) return;
+      logger.log(`HTTP ${request.method} ${request.url}`, {
+        method: request.method,
+        url: request.url,
+        ip: request.ip,
+        params: request.params,
+        query: request.query,
+      });
+    } catch (err) {
+      logger.error('request-logging hook failed', err instanceof Error ? err : new Error(String(err)), 'preHandler');
+    }
+  });
+
+  app.addHook('onError', async (request, _reply, error) => {
+    logger.error(`HTTP ${request.method} ${request.url} failed`, error, 'onError');
+  });
+
+  app.setNotFoundHandler((request, reply) => {
+    logger.warn(`HTTP ${request.method} ${request.url} -> 404`, undefined, 'notFound');
+    return reply.code(404).type('text/plain').send('not found');
+  });
   app.register(formbody);
   app.register(view, {
     engine: { ejs },
@@ -20,6 +55,33 @@ export function buildApp(store: Store) {
 
   app.get('/', async (_req, reply) => {
     return reply.view('index.ejs', { settings, modes: ['playlist', 'album', 'liked', 'saved-albums', 'all-playlists'] });
+  });
+
+  app.get(`${apiPrefix}/get-updates`, async (_req, reply) => {
+    const [appEntries, errorEntries, startupEntries] = await Promise.all([
+      logger.getLogs({ type: 'app' }).catch(() => []),
+      logger.getLogs({ type: 'error' }).catch(() => []),
+      logger.readLogFile('app.start.json').catch(() => []),
+    ]);
+    return reply.send({
+      version: process.env.TAG_VERSION ?? null,
+      commit_message: process.env.COMMIT_MESSAGE ?? null,
+      project_id: process.env.PROJECT_ID ?? null,
+      namespace: process.env.NAMESPACE ?? null,
+      slave_repo: process.env.SLAVE_REPO ?? null,
+      envs: healthEnvs,
+      logs: {
+        app: appEntries.slice(-50),
+        error: errorEntries.slice(-50),
+        start: startupEntries.slice(-50),
+      },
+      urls: {
+        home: `${apiPrefix}/`,
+        migrate: `${apiPrefix}/migrate`,
+        getUpdates: `${apiPrefix}/get-updates`,
+        jobs: `${apiPrefix}/jobs`,
+      },
+    });
   });
 
   app.post('/migrate', async (req, reply) => {

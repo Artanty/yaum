@@ -1,4 +1,5 @@
 import { applyYtmProxy, settings } from '../config.js';
+import { logger } from '../lib/logger.js';
 import type { Candidate } from '../model.js';
 
 type Ytmusic = import('ytmusic-api').default;
@@ -36,6 +37,7 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
       return await fn();
     } catch (err) {
       lastErr = err;
+      logger.error(`ytmusic: attempt ${i + 1}/${attempts} failed`, err instanceof Error ? err : new Error(String(err)), 'withRetry');
       const msg = String(err);
       if (/429|rate|fetch failed|timeout|ENOTFOUND|ECONNREFUSED|socket/i.test(msg) || i < attempts - 1) {
         await new Promise((r) => setTimeout(r, Math.min(1000 * 2 ** i, 8000)));
@@ -47,7 +49,9 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
 
 export async function searchSongs(query: string): Promise<Candidate[]> {
   const ytmusic = await getYtmusic();
+  const queryTime = Date.now();
   const songs = await withRetry(() => ytmusic.searchSongs(query));
+  logger.log('ytmusic: search ok', { query, resultCount: songs.length, elapsedMs: Date.now() - queryTime });
   return songs.map((s) => ({
     videoId: s.videoId,
     title: s.name,

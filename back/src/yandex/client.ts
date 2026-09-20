@@ -1,4 +1,5 @@
 import { ProxyAgent, fetch as undiciFetch } from 'undici';
+import { logger } from '../lib/logger.js';
 import { settings } from '../config.js';
 import type { Collection, TrackMeta } from '../model.js';
 import type { YandexTarget } from '../url.js';
@@ -40,11 +41,16 @@ export class YandexClient {
     } as any);
     const body = (await res.json().catch(() => null)) as YandexResponse | null;
     if (body?.error) {
-      throw new Error(`Yandex API error [${body.error.name}]: ${body.error.message}`);
+      const err = new Error(`Yandex API error [${body.error.name}]: ${body.error.message}`);
+      logger.error('yandex: API error', err, 'yandexClient.request');
+      throw err;
     }
     if (!res.ok) {
-      throw new Error(`Yandex API HTTP ${res.status} for ${path}`);
+      const err = new Error(`Yandex API HTTP ${res.status} for ${path}`);
+      logger.error('yandex: HTTP error', err, 'yandexClient.request');
+      throw err;
     }
+    logger.log('yandex: ok', { path, status: res.status });
     return body?.result ?? null;
   }
 

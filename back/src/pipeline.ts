@@ -7,6 +7,7 @@ import { artistStr, matchUsable, type Candidate, type Collection, type MatchResu
 import { fromForm, type YandexTarget } from './url.js';
 import { fetchCollections as fetchCollectionsReal, YandexClient } from './yandex/client.js';
 import { searchSongs as searchSongsReal } from './ytmusic/search.js';
+import { logger } from './lib/logger.js';
 
 export interface PipelineDeps {
   fetchCollections: (target: YandexTarget) => Promise<Collection[]>;
@@ -31,8 +32,10 @@ export async function matchWithSearch(
   queue: PQueue,
 ): Promise<MatchResult> {
   const key = cacheKey(track);
+  logger.log('pipeline: match start', { title: track.title, artists: track.artists, duration: track.duration });
   const cached = await store.cacheGet(key);
   if (cached?.video_id) {
+    logger.log('pipeline: cache hit', { key, videoId: cached.video_id, score: cached.score });
     return {
       status: cached.score >= settings.matchAccept ? 'matched' : 'uncertain',
       score: cached.score ?? 0,
@@ -49,7 +52,7 @@ export async function matchWithSearch(
     try {
       candidates = await queue.add(() => deps.searchSongs(query)) as Candidate[];
     } catch (err) {
-      console.error(`search failed for "${query}":`, err instanceof Error ? err.message : err);
+      logger.error(`search failed for "${query}"`, err, 'pipeline.matchWithSearch');
     }
     const result = matchTrack(track, candidates);
     if (best === null || result.score > best.score) {
@@ -64,6 +67,7 @@ export async function matchWithSearch(
   }
 
   if (!best) best = { status: 'not_found', score: 0 };
+  logger.log('pipeline: match done', { status: best.status, score: best.score, videoId: best.videoId ?? null });
   if (best.videoId) {
     await store.cachePut(key, best.videoId, best.ytTitle ?? '', best.ytArtist ?? '', best.ytDuration ?? null, best.score);
   }
@@ -147,9 +151,10 @@ export async function runJob(store: Store, jobId: string, mode: string, source: 
       if (!coll.tracks.length) continue;
       summaries.push(await runCollection(store, jobId, idx++, coll, deps, queue));
     }
+    logger.log('pipeline: job done', { jobId, collections: summaries.length });
     await store.setJob(jobId, { status: 'done', summary_json: JSON.stringify(summaries) });
   } catch (err) {
-    console.error(`job ${jobId} failed:`, err);
+    logger.error(`job ${jobId} failed`, err, 'pipeline.runJob');
     await store.setJob(jobId, { status: 'failed', error: err instanceof Error ? err.message : String(err) });
   }
 }

@@ -1,6 +1,8 @@
 export const MODES = ['playlist', 'liked', 'album', 'saved-albums', 'all-playlists'] as const;
 export type Mode = (typeof MODES)[number];
 
+import { logger } from './lib/logger.js';
+
 
 export interface YandexTarget {
   mode: Mode;
@@ -21,17 +23,20 @@ export function parseUrl(url: string): YandexTarget {
   url = url.trim();
   const album = ALBUM_RE.exec(url);
   if (album?.groups) {
+    logger.log('url: album', { albumId: album.groups.album, url });
     return { mode: 'album', albumId: album.groups.album, url };
   }
   const share = SHARE_RE.exec(url);
   if (share?.[1]) {
-    return { mode: 'playlist', user: null, shareToken: share[1], url };
+    logger.log('url: share playlist', { shareToken: share[1], url });
+  return { mode: 'playlist', user: null, shareToken: share[1], url };
   }
   const m = PLAYLIST_RE.exec(url);
   if (m?.groups) {
     const user = m.groups.user;
     const kind = m.groups.kind;
     if (kind.toLowerCase() === 'liked') {
+      logger.log('url: liked', { user, url });
       return { mode: 'liked', user, url };
     }
     return { mode: 'playlist', user, kind, url };
