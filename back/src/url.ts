@@ -1,6 +1,7 @@
 export const MODES = ['playlist', 'liked', 'album', 'saved-albums', 'all-playlists'] as const;
 export type Mode = (typeof MODES)[number];
 
+
 export interface YandexTarget {
   mode: Mode;
   user?: string | null;
