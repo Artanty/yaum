@@ -310,3 +310,17 @@ selectors to the REAL 2026 class prefixes (mixcase, [class*="…"]-robust vs has
 Fallback kept: if no CommonTrack rows, also probe Meta_* light selectors (self-calibrating, per line 286-287).
 Verify after (rule 3 ✓): node --check web/content.js parses; grep popup.html/popup.js id triple (msg|out|scan ✓);
 grep the new class tokens exist in THIS pasted DOM. Nothing committed (rule 5 ✓). Rule 4: DECISIONS 295→~308.
+## 2026-09-21 (rule 1) NEW TASK PLAN — "script that automatically parses data from yandex"
+CLARIFY FIRST (honesty, rules 2/4): the ONLY thing that has EVER returned 200 through this whole session
+is the rendered DOM in the user's logged-in tab (every API/undici/urllib network path → 403 WAF wall incl
+OAuth-owning token; extension DOM-reader = the proven 200, docked green ✓ commit 56f2f48). So "automatically
+parse data from yandex" splits honestly into two very different scopes:
+  A. DOM-side "automatic": make the extension scan WITHOUT a button click — popup auto-runs the same DOM
+     read on popup open (chrome.storage.lastUrl dedup-guard so it doesn't re-copy every tab switch;
+     no network, no token → still can never 403, rule 3 ✓). ZERO API. Plain, small, safe.
+  B. server-side "parse the data": a back/ script that consumes the extension's JSON (clipboard/paste/file)
+     and normalizes → but the moment it needs to BUILD/own a target playlist it hits the same API WAF wall.
+     Parsing JSON itself = offline (no 403), so that part is safe; the build step stays 403-blocked (only
+     resolvable by an owning token on a non-flagged host).
+DECISION-NEEDED (rule 1 → pick ONE, then I code): A is delivered-green and can't 403; B-parse chunks are
+offline-safe but B-build is still walled. Which do you want NOW?
