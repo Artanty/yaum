@@ -15,8 +15,9 @@ export interface YandexTarget {
 
 const PLAYLIST_RE =
   /(?:music\.yandex\.(?:ru|by|kz|am|az|ge|com|md|tm|kg|uz)\/)users\/(?<user>[^/]+)\/playlists\/(?<kind>[^/?#&]+)/i;
-// share links  https://music.yandex.ru/playlists/lk.<token>  (token includes the lk. prefix)
-const SHARE_RE = /(?:music\.yandex\.(?:ru|by|kz|am|az|ge|com|md|tm|kg|uz)\/)playlists\/(lk\.[0-9a-fA-F-]{36})/i;
+// share links  https://music.yandex.ru/playlists/{token}
+// token is either the legacy "lk.<uuid>" form or (2025+ web copy-link) a bare 36-char uuid; no user prefix in either.
+const SHARE_RE = /(?:music\.yandex\.(?:ru|by|kz|am|az|ge|com|md|tm|kg|uz)\/)playlists\/((?:lk\.)?[0-9a-fA-F-]{36})/i;
 const ALBUM_RE = /(?:music\.yandex\.(?:ru|by|kz|am|az|ge|com|md|tm|kg|uz)\/)album\/(?<album>\d+)/i;
 
 export function parseUrl(url: string): YandexTarget {

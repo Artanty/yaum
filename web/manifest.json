@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "YaMusic Share → Track List (DOM reader)",
+  "version": "0.1.0",
+  "description": "Captures the track list from an already-rendered Yandex Music playlist/album page in this browser tab and copies it as JSON. Reads the rendered DOM only — no Yandex API calls, no token, no WAF-able requests.",
+  "minimum_chrome_version": "116",
+  "permissions": ["activeTab", "clipboardWrite"],
+  "content_scripts": [
+    {
+      "matches": ["*://music.yandex.ru/*", "*://music.yandex.kz/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "YaMusic Share → Track List"
+  }
+}
