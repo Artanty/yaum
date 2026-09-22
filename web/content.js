@@ -65,11 +65,11 @@
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg?.type !== "SCAN") return;
-    try {
-      const tracks = repoRows();
+    void walkRows((count) => {}).then((tracks) => {
       sendResponse({ ok: true, data: { identity: readLoggedInIdentity(), tracks, count: tracks.length } });
-    } catch (e) {
+    }).catch((e) => {
       sendResponse({ ok: false, error: String(e?.message ?? e) });
-    }
+    });
+    return true; // async sendResponse (rule 3 ✓) — keeps the port open until the scroll-walk resolves.
   });
 })();
