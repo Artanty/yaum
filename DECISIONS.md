@@ -324,3 +324,21 @@ parse data from yandex" splits honestly into two very different scopes:
      resolvable by an owning token on a non-flagged host).
 DECISION-NEEDED (rule 1 → pick ONE, then I code): A is delivered-green and can't 403; B-parse chunks are
 offline-safe but B-build is still walled. Which do you want NOW?
+## 2026-09-24 (rule 1) PLAN — finish the in-flight web/ popup (user: "continue"; session note: no auto-clipboard)
+Uncommitted web/ state is a broken half-finished popup: popup.js has TDZ `names`, undefined `logEl`/`buildJson`/
+`dedupeJson`, two duplicate copy/stop listeners, and AUTO-writes to clipboard after scan (against user note
+"dont write text to clipboard automatically"). dot popup.js cleanly and make the walk actually streamable.
+Actions: 1) content.js: emit SCAN_STEP with full `items`; handle SCAN_STOP (abort flag -> early resolve in down/up);
+   clear ACC on each new SCAN. 2) popup.js: rewrite — per-name log, gradual render, stop button, side-panel button,
+   explicit "Copy JSON" button ONLY (no auto clipboard), drop all dead refs. 3) popup.html unchanged (has id="log",
+   all buttons/ids present). 4) Verify: node --check both; cd web && npx playwright test (fixture walk stays green);
+   grep popup.js for undefined syms. 5) rule 5: no commit. NOTE for the pending A-vs-B decision: A-fix is exactly this popup finishing — proceeding on A-track only.
+## 2026-09-24 (rule 2) PROGRESS — popup rewritten clean, walk streams, stop works
+- web/popup.js rewritten (no more TDZ `names`, `logEl`/`buildJson`/`dedupeJson` gone; single set of listeners;
+  clipboard touched ONLY on explicit "Copy JSON" click — scan no longer auto-copies, per session note).
+- web/content.js: SCAN_STEP now carries full `items` (popup re-renders live), handles SCAN_STOP (abort flag,
+  down/up resolve early), ACC.clear() per new SCAN. Multi-scan refill correct.
+- Verify: node --check content.js+popup.js OK; grep popup.js shows clipboard only at the copy handler;
+  npx playwright test 1/1 green (fixture walk). web/test results fresh ("passed").
+- STATE: uncommitted (rule 5). Modified: DECISIONS.md, web/popup.js, web/content.js (+ pre-existing web/manifest.json,
+  web/popup.html already modified in the prior session).

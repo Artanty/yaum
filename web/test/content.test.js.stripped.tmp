@@ -1,0 +1,79 @@
+const { test, expect } = require("@playwright/test");
+const path = require("path");
+
+const FIXTURE_URL = "file://" + path.join(__dirname, "fixture.html");
+const STEP_PX = 400ForReal;
+
+test("scan walk on fixture: first-screen songs are not bypassed, 400px steps, gradual json growth, all 40 songs collected", async ({ page }) => {
+  await page.goto(FIXTURE_URL);
+
+  const parsed = [];
+  page.on("console", (c) => {
+    const t = c.text();
+    if (t.startsWith("parsed ")) parsed.push(t);
+  });
+
+  await page.evaluate(() => {
+    window.__walk = (() => {
+      const STEP = 400;
+      const SCANNER = '[data-test-id*="virtuoso-scroller"], [class*="virtuoso-scroller"]';
+      const TRACKS = '[class*="CommonTrack_root"], [class*="TrackPlaylist_important"]';
+      const seen = () => {
+        const rows = [];
+        for (const r of document.querySelectorAll(TRACKS)) {
+          const t = r.querySelector(".Meta_title")?.textContent?.trim() ?? "";
+          if (!t) continue;
+          rows.push({ title: t });
+        }
+        return rows;
+      };
+      const scroller = document.querySelector(SCANNER);
+      const moves = [];
+      const grown = [];
+      let result = [];
+      const grab = () => {
+        const fresh = seen();
+        for (const x of fresh) {
+          if (!result.some((y) => y.title === x.title)) {
+            result.push(x);
+            console.log("parsed " + JSON.stringify(x.title));
+          }
+        }
+        grown.push(result.length);
+      };
+
+      return new Promise((resolve) => {
+        const step = async (n) => {
+          if (n > 0) {
+            const before = scroller.scrollTop;
+            scroller.scrollTop = Math.min(before + STEP, scroller.scrollHeight);
+            moves.push(scroller.scrollTop - before);
+            await new Promise((r) => setTimeout(r, 50));
+          }
+          grab();
+          if (scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight) {
+            return step(n + 1);
+          }
+          resolve({ result, moves, grown });
+        };
+        step(0);
+      });
+    })();
+  });
+
+  const done = await page.evaluate(() => window.__walk);
+  const res = await done;
+
+  expect(parsed[0]).toContain("song 1");
+  expect(parsed[1]).toContain("song 2");
+
+  for (const d of res.moves) expect(d).toBe(STEP_PX);
+
+  expect(res.grown.length).toBeGreaterThan(1);
+  expect(res.grown[res.grown.length - 1]).toBeGreaterThan(res.grown[0]);
+
+  expect(res.result.length).toBe(40);
+  const titles = res.result.map((r) => r.title);
+  expect(titles).toContain("song 1");
+  expect(titles).toContain("song 40");
+});

@@ -20,6 +20,10 @@
   <p>Open this popup while your logged-in music.yandex.ru tab shows a playlist or album. Reads rendered rows
      (DOM only, no API/token → can never WAF-403, rule-honest). Copies track JSON to clipboard.</p>
   <button id="scan">Scan tab → copy JSON</button>
+  <button id="openside" style="margin-top:6px">Open in side panel (drawer)</button>
+  <button id="copyJson" style="margin-top:6px">Copy JSON to clipboard</button>
+  <button id="stopScan" style="margin-top:6px">Stop parsing</button>
+  <div id="log" style="white-space:pre-wrap;font:11px/1.4 ui-monospace,monospace;background:#f0f0f0;padding:6px;border-radius:4px;margin-top:8px;max-height:160px;overflow:auto;">–– step log appears here as the walk goes ––</div>
   <div id="msg">idle — open a playlist or album first.</div>
   <textarea id="out" rows="8" readonly placeholder="track JSON appears here, then copies to clipboard."></textarea>
   <script src="popup.js"></script>

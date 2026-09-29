@@ -1,6 +1,6 @@
 {
   "name": "mush",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Yandex Music -> YouTube Music playlist converter (links)",
   "type": "module",
   "engines": {
