@@ -1,6 +1,5 @@
 import { WRatio } from 'fuzzball';
 import { settings } from './config.js';
-import { artistStr } from './model.js';
 import type { Candidate, MatchResult, MatchStatus, TrackMeta } from './model.js';
 import { logger } from './lib/logger.js';
 
@@ -44,11 +43,17 @@ export function durationOk(a: number | null | undefined, b: number | null | unde
   return diff <= Math.max(0.1 * Math.min(a, b), tol);
 }
 
+// A qualifier that changes the RECORDING (not just the mastering). normalize() deletes all bracketed
+// text, so "I Don't Feel Like Dancin' (Teenage Bad Girl Remix)" scores an identical 1.00 to the studio
+// cut, and a remix is often only seconds shorter so the duration check does not catch it either.
+// Remasters are deliberately NOT here — a remaster is the same recording.
+const QUALIFIER_RE = /\b(remix|live|acoustic|cover|instrumental|karaoke|demo|sped[\s-]?up|slowed(?:\s*down)?)\b/i;
+
 function wratio(a: string, b: string): number {
   return WRatio(a, b) / 100;
 }
 
-export function scoreCandidate(track: TrackMeta, cand: Candidate): [number, boolean | null] {
+export function scoreCandidate(track: TrackMeta, cand: Candidate): number {
   const tSim = Math.max(
     wratio(normalize(track.title), normalize(cand.title)),
     wratio(feature(track.title), feature(cand.title)),
@@ -60,9 +65,9 @@ export function scoreCandidate(track: TrackMeta, cand: Candidate): [number, bool
     ...track.artists.map((a) => wratio(normalize(a), candArtists)),
   );
   let combined = 0.6 * tSim + 0.4 * aSim;
-  const dur = durationOk(track.duration, cand.duration, settings.durationTolerance);
-  if (dur === false) combined *= 0.3;
-  return [combined, dur];
+  if (QUALIFIER_RE.test(cand.title) && !QUALIFIER_RE.test(track.title)) combined *= 0.5;
+  if (durationOk(track.duration, cand.duration, settings.durationTolerance) === false) combined *= 0.3;
+  return combined;
 }
 
 export function buildQueries(track: TrackMeta): string[] {
@@ -92,7 +97,7 @@ export function buildQueries(track: TrackMeta): string[] {
 export function matchTrack(track: TrackMeta, candidates: Candidate[]): MatchResult {
   let best: MatchResult | null = null;
   for (const cand of candidates) {
-    const [score, _dur] = scoreCandidate(track, cand);
+    const score = scoreCandidate(track, cand);
     if (best === null || score > best.score) {
       best = {
         status: 'not_found' as MatchStatus,
@@ -114,5 +119,3 @@ export function matchTrack(track: TrackMeta, candidates: Candidate[]): MatchResu
   logger.log(`matchTrack: "${track.title}" -> ${best.status} (score ${best.score.toFixed(2)})`, { title: track.title, status: best.status, score: best.score, videoId: best.videoId });
   return best;
 }
-
-export { artistStr };

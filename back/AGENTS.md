@@ -4,14 +4,14 @@ Context for AI agents working in this repository. Read this before making change
 
 ## What this project is
 
-**mush** — a web service that converts Yandex Music collections (playlist URL, album URL, liked tracks, saved albums, all-playlists) into **YouTube Music links**. There is deliberately **no YouTube Music auth or writes**: output is a per-track match report and a plain list of `https://music.youtube.com/watch?v=<videoId>` links (links work anonymously).
+**mush** — a web service that converts Yandex Music collections (playlist URL, album URL, liked tracks) — or track JSON pasted straight from the YaMusic Share browser extension (`mode=json`) — into **YouTube Music links**. There is deliberately **no YouTube Music auth or writes**: output is a per-track match report and a plain list of `https://music.youtube.com/watch?v=<videoId>` links (links work anonymously).
 
 Originally built in Python (FastAPI + yandex-music + ytmusicapi); **fully rewritten to Node.js/TypeScript** in-place — no Python code remains (except historical mention in git-less tree; don't resurrect it).
 
 ## Commands
 
 ```bash
-npm test                 # vitest (19 tests: url, matcher, db, pipeline-with-mocks)
+npm test                 # vitest (28 tests: url, matcher, pasteJson, db, pipeline-with-mocks)
 npm run lint             # tsc --noEmit
 npm run build            # tsc -> dist/
 npm start                # tsx src/server.ts (no build step; HOST/PORT env, default 0.0.0.0:8000)
@@ -26,7 +26,8 @@ Not a git repo (no commits/PRs unless the user initializes one).
 ```
 src/config.ts          env settings (dotenv): tokens, proxies, thresholds, MySQL connection
 src/model.ts           TrackMeta / MatchResult / Candidate / Collection + helpers
-src/url.ts             Yandex URL parser + modes: playlist|album|liked|saved-albums|all-playlists
+src/url.ts             Yandex URL parser + Mode: playlist|liked|album|json (json parses no URL)
+src/pasteJson.ts        parses extension/CLI track JSON -> {tracks, skipped}; used by cli.ts AND mode=json
 src/matcher.ts         normalize/transliterate/queries/WRatio scoring (ported from Python original)
 src/db.ts              mysql2 Store: jobs / items / match_cache (MySQL, async API)
 src/pipeline.ts        job runner: runJob/runCollection/matchWithSearch/startJob; deps injection via PipelineDeps
@@ -42,16 +43,26 @@ test/*.test.ts         vitest suites; DB tests run against local MySQL (brew), o
 ## Data flow
 
 ```
-POST /migrate {mode, source} -> startJob() -> store.createJob + fire-and-forget runJob()
-runJob: fromForm() -> fetchCollections() [Yandex] -> per collection:
+POST /migrate {mode, source} -> validates via fromForm(), or via parseTrackJson() when mode=json
+  (bad paste = 400, no job created) -> startJob() -> store.createJob + fire-and-forget runJob()
+startJob stores a SHORT label for json jobs ("pasted JSON, N tracks"), never the raw blob:
+  jobs.source is printed verbatim on the job page. runJob still gets the full text by argument.
+runJob: fromForm() -> mode=json builds the Collection from parseTrackJson and SKIPS fetchCollections
+  entirely (zero Yandex requests — the API is unreachable from the dev box anyway);
+  otherwise fetchCollections() [Yandex] -> per collection:
   sequential per track: dedupe by title|artists|duration -> matchWithSearch
     (check match_cache -> for each query in buildQueries(): search via p-queue
-     -> matchTrack score; stop early on 'matched'; cache only when videoId found)
+     -> matchTrack score; stop early on 'matched'; cache only when videoId found.
+     Stop-early-on-'matched' means a below-threshold track only ever sees ONE query's candidates,
+     so a track the first query misses can never be recovered - that is why live runs can differ
+     between passes even for the same JSON.)
   -> write items rows -> summary counts
 UI polls GET /job/:id every 3s; ?format=json and ?format=links (text) exports.
 ```
 
 Match status: `matched` (score ≥ MATCH_ACCEPT 0.75) / `uncertain` (≥ 0.55) / `not_found` / `skipped_dup`. Scoring: `0.6*title WRatio + 0.4*artist WRatio` on normalized strings, `×0.3` penalty when duration differs > max(5s, 10%). Queries include a Cyrillic→Latin transliteration variant.
+**`x0.5` qualifier penalty** (matcher.ts QUALIFIER_RE): normalize() deletes all bracketed text, so "...Dancin' (Teenage Bad Girl Remix)" scored an identical 1.00 to the studio cut, and remixes are often seconds shorter so the duration check misses them too. Any candidate title carrying remix/live/acoustic/cover/instrumental/karaoke/demo/sped-up/slowed that the source lacks is halved. `remaster` is deliberately excluded - a remaster is the same recording.
+**`SCORE_VERSION` in pipeline.ts cacheKey**: match_cache stores the verdict AND the score, so any scoring change must bump the version or already-cached tracks silently keep the old verdict forever (this bit us - a fix verified in a unit test still returned the bad cached 1.00 in a live re-run).
 
 ## Hard-won knowledge (don't rediscover)
 
@@ -67,6 +78,7 @@ Match status: `matched` (score ≥ MATCH_ACCEPT 0.75) / `uncertain` (≥ 0.55) /
 - `ytmusic-api@5.3.1` (npm, zS1L3NT/ts-npm-ytmusic-api) — **read-only** (search etc., NO playlist writes/OAuth). `initialize({HL, GL})` only; anonymous search.
 - Internally uses **axios**: it honours `HTTP(S)_PROXY`/`http_proxy` env vars (set via `applyYtmProxy()`), and **has NO default timeout** → blocked YouTube hangs forever. Fix already in `ytmusic/search.ts`: `axios.defaults.timeout = settings.ytmTimeout` before constructing the client (its `axios.create()` inherits global defaults).
 - `searchSongs()` returns `{videoId, name, artist:{name}, duration (seconds|null)}` — mapped to `Candidate{videoId,title,artists,duration}` in `search.ts`.
+- `axios` is a DECLARED dependency on purpose: `ytmusic/search.ts` imports it only to set `axios.defaults.timeout` (ytmusic-api creates its client from a plain `axios.create()`, which inherits global defaults, and has no timeout of its own - blocked YouTube would hang forever). It used to resolve only as a ytmusic-api transitive, so a transitive bump could break search at runtime.
 - **The dev machine for this project cannot reach YouTube** (connections silently drop, curl times out; Yandex is reachable). Search behavior is therefore verified with mocked deps only; live match quality must be checked behind `YTM_PROXY` or on another host. Expect long wall-clock times when YouTube is unreachable (retries × timeouts) — this is correct behavior, not a bug.
 
 ### Environment quirks (this dev box)
@@ -85,7 +97,7 @@ Match status: `matched` (score ≥ MATCH_ACCEPT 0.75) / `uncertain` (≥ 0.55) /
 - Tuning envs: `MATCH_ACCEPT`, `MATCH_UNCERTAIN`, `DURATION_TOLERANCE`, `SEARCH_CONCURRENCY`, `YTM_TIMEOUT` (ms!), `YTM_PROXY`, `YANDEX_PROXY`, `YANDEX_TOKEN`, `HOST`; DB via `DB_HOST`/`DB_PORT` (3306)/`DB_DATABASE`/`DB_USERNAME`/`DB_PASSWORD`. Note `YTM_TIMEOUT` is **milliseconds** (default 20000).
 
 ## Verifying changes
-1. `npm test` (must stay green; 19 tests) and `npm run lint`.
+1. `npm test` (must stay green; 28 tests) and `npm run lint`.
 2. Yandex-side changes: live-check against album `1193829` ("Colour", Andy Hunter, 12 tracks, anonymous) — CLI `match` will hang-ish on searches (no YouTube here); prefer a tiny tsx script importing `fetchCollections` with a fresh `YandexClient(null, null)`.
 3. Server changes: build, start on a test port, curl `/healthz`, `/`, `/jobs`, POST `/migrate` (album 1193829) expecting `303`, poll `/job/<id>?format=json` expecting eventual `done` with 12 `not_found` items when YouTube is blocked.
 4. Matcher changes: run test suite; scoring uses fuzzball `WRatio` (0–100, divided by 100) — rapidfuzz-equivalent but values differ slightly from the old Python implementation; thresholds 0.75/0.55 tuned for it.

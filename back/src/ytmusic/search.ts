@@ -11,6 +11,8 @@ async function build(): Promise<Ytmusic> {
   applyYtmProxy();
   const axios = (await import('axios')).default;
   // ytmusic-api creates its client from a plain axios.create(), which inherits these defaults
+  // and has NO timeout of its own — a blocked YouTube would hang forever instead of failing.
+  // This is why axios is a declared dependency rather than an undeclared ytmusic-api transitive.
   axios.defaults.timeout = settings.ytmTimeout;
   const mod = await import('ytmusic-api');
   const YTMusic = mod.default;
@@ -51,8 +53,11 @@ export async function searchSongs(query: string): Promise<Candidate[]> {
   const ytmusic = await getYtmusic();
   const queryTime = Date.now();
   const songs = await withRetry(() => ytmusic.searchSongs(query));
-  logger.log('ytmusic: search ok', { query, resultCount: songs.length, elapsedMs: Date.now() - queryTime });
-  return songs.map((s) => ({
+  // YT Music search intermittently yields rows with no videoId (mix rows, headers). They can never
+  // produce a link, so they must not be able to win the scoring and blank out a result.
+  const usable = songs.filter((s) => typeof s.videoId === 'string' && s.videoId.length > 0);
+  logger.log('ytmusic: search ok', { query, resultCount: usable.length, dropped: songs.length - usable.length, elapsedMs: Date.now() - queryTime });
+  return usable.map((s) => ({
     videoId: s.videoId,
     title: s.name,
     artists: s.artist?.name ?? '',

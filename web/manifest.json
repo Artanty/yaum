@@ -1,10 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "YaMusic Share → Track List (DOM reader)",
-  "version": "0.1.0",
-  "description": "Captures the track list from an already-rendered Yandex Music playlist/album page in this browser tab and copies it as JSON. Reads the rendered DOM only — no Yandex API calls, no token, no WAF-able requests.",
+  "name": "YaMusic Share → YouTube Music",
+  "version": "0.2.0",
+  "description": "Reads the rendered track list from a Yandex Music playlist/album tab (DOM only — no Yandex API, no token, cannot WAF-403) and converts it to YouTube Music links via a mush server.",
   "minimum_chrome_version": "116",
-  "permissions": ["activeTab", "clipboardWrite", "sidePanel"],
+  "permissions": ["clipboardWrite", "sidePanel"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "optional_host_permissions": ["https://*/*"],
   "content_scripts": [
     {
       "matches": ["*://music.yandex.ru/*", "*://music.yandex.kz/*"],
@@ -15,6 +17,6 @@
   "side_panel": { "default_path": "popup.html" },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "YaMusic Share → Track List"
+    "default_title": "YaMusic Share → YouTube Music"
   }
 }

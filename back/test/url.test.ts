@@ -48,6 +48,11 @@ describe('fromForm', () => {
     expect(t.user).toBe('vasya');
   });
 
+  it('routes pasted track JSON without trying to parse a Yandex URL', () => {
+    const t = fromForm('json', '[{"title":"Daze","artists":["Poets Of The Fall"],"durationS":326}]');
+    expect(t.mode).toBe('json');
+  });
+
   it('rejects unknown modes', () => {
     expect(() => fromForm('nope' as never, 'x')).toThrow(/unknown mode/);
   });

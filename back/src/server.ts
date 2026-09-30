@@ -6,6 +6,7 @@ import ejs from 'ejs';
 import { settings } from './config.js';
 import { openStore, type Store } from './db.js';
 import { startJob } from './pipeline.js';
+import { parseTrackJson } from './pasteJson.js';
 import { fromForm } from './url.js';
 import { logger } from './lib/logger.js';
 
@@ -54,7 +55,7 @@ export function buildApp(store: Store) {
   });
 
   app.get('/', async (_req, reply) => {
-    return reply.view('index.ejs', { settings, modes: ['playlist', 'album', 'liked', 'saved-albums', 'all-playlists'] });
+    return reply.view('index.ejs', {});
   });
 
   app.get(`${apiPrefix}/get-updates`, async (_req, reply) => {
@@ -76,7 +77,7 @@ export function buildApp(store: Store) {
         start: startupEntries.slice(-50),
       },
       urls: {
-        home: `${apiPrefix}/`,
+        home: '/',
         migrate: `${apiPrefix}/migrate`,
         getUpdates: `${apiPrefix}/get-updates`,
         jobs: `${apiPrefix}/jobs`,
@@ -89,7 +90,12 @@ export function buildApp(store: Store) {
     const mode = body?.mode ?? '';
     const source = (body?.source ?? '').trim();
     try {
-      fromForm(mode, source);
+      if (mode === 'json') {
+        // Reject a bad paste up front rather than creating a job that is guaranteed to fail.
+        parseTrackJson(source);
+      } else {
+        fromForm(mode, source);
+      }
     } catch (err) {
       return reply.code(400).type('text/plain').send(err instanceof Error ? err.message : String(err));
     }
@@ -159,5 +165,3 @@ if (process.argv[1]?.endsWith('server.ts') || process.argv[1]?.endsWith('server.
     process.exit(1);
   });
 }
-
-export { app, store };

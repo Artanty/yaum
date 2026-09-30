@@ -68,16 +68,8 @@ export class YandexClient {
     return this.request(`/playlist/${encodeURIComponent(token)}`);
   }
 
-  playlistsList(user: string): Promise<any[]> {
-    return this.request(`/users/${encodeURIComponent(user)}/playlists/list`);
-  }
-
   likesTracks(user?: string | null): Promise<any> {
     return this.request(`/users/${encodeURIComponent(user || 'me')}/likes/tracks`);
-  }
-
-  likesAlbums(user?: string | null): Promise<any[]> {
-    return this.request(`/users/${encodeURIComponent(user || 'me')}/likes/albums`, { rich: 'true' });
   }
 
   async tracks(ids: string[]): Promise<any[]> {
@@ -165,7 +157,7 @@ export async function fetchCollections(target: YandexTarget, client: YandexClien
       : await client.playlist(target.kind!, target.user!);
     if (!pl) throw new Error('playlist not found or not accessible');
     const metas = await expandTracks(pl.tracks ?? [], client);
-    return [{ title: pl.title ?? 'Playlist', sourceUrl: target.url ?? null, tracks: metas }];
+    return [{ title: pl.title ?? 'Playlist', tracks: metas }];
   }
 
   if (target.mode === 'liked') {
@@ -173,57 +165,13 @@ export async function fetchCollections(target: YandexTarget, client: YandexClien
     const ids = (data?.tracks ?? []).map(trackMetaFromId).filter((x: any): x is string => Boolean(x));
     const full = await client.tracks(ids);
     const metas = full.map(trackMeta).filter((m): m is TrackMeta => Boolean(m));
-    return [{ title: 'Liked from Yandex Music', sourceUrl: target.url ?? null, tracks: metas }];
+    return [{ title: 'Liked from Yandex Music', tracks: metas }];
   }
 
   if (target.mode === 'album') {
     const album = await client.albumWithTracks(target.albumId!);
     if (!album) throw new Error('album not found');
-    return [{ title: album.title ?? "Album", sourceUrl: target.url ?? null, tracks: albumTracks(album) }];
-  }
-
-  if (target.mode === 'saved-albums') {
-    const likes = await client.likesAlbums(target.user);
-    const collections: Collection[] = [];
-    for (const like of likes ?? []) {
-      const album = like?.album;
-      if (!album) continue;
-      let tracks = albumTracks(album);
-      if (!tracks.length) {
-        try {
-          const full = await client.albumWithTracks(String(album.id));
-          tracks = full ? albumTracks(full) : [];
-        } catch {
-          tracks = [];
-        }
-      }
-      const artistNames = (album.artists ?? []).map((a: any) => a.name).filter(Boolean).join(', ');
-      collections.push({
-        title: artistNames ? `${artistNames} — ${album.title ?? 'Album'}` : album.title ?? 'Album',
-        sourceUrl: null,
-        tracks,
-      });
-    }
-    return collections;
-  }
-
-  if (target.mode === 'all-playlists') {
-    const playlists = await client.playlistsList(target.user!);
-    const collections: Collection[] = [];
-    for (const pl of playlists ?? []) {
-      try {
-        const full = await client.playlist(String(pl.kind), target.user!);
-        const metas = await expandTracks(full.tracks ?? [], client);
-        collections.push({
-          title: full.title ?? `Playlist ${pl.kind}`,
-          sourceUrl: `https://music.yandex.ru/users/${target.user}/playlists/${pl.kind}`,
-          tracks: metas,
-        });
-      } catch {
-        // skip inaccessible playlist
-      }
-    }
-    return collections;
+    return [{ title: album.title ?? "Album", tracks: albumTracks(album) }];
   }
 
   throw new Error(`unknown mode: ${target.mode}`);

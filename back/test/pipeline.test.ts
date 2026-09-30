@@ -7,7 +7,6 @@ function makeCollections(): Collection[] {
   return [
     {
       title: 'Test Album',
-      sourceUrl: 'https://music.yandex.ru/album/1',
       tracks: [
         { title: 'Song A', artists: ['Artist X'], album: 'Album', duration: 200, sourceId: '1:1' },
         { title: 'Song A', artists: ['Artist X'], album: 'Album', duration: 200, sourceId: '1:2' }, // exact dupe
@@ -20,7 +19,10 @@ function makeCollections(): Collection[] {
 
 const CANDS: Record<string, Candidate[]> = {
   'Song A Artist X': [{ videoId: 'vidA', title: 'Song A', artists: 'Artist X', duration: 201 }],
-  'Song B Artist Y': [{ videoId: 'vidB', title: 'Song B (Live)', artists: 'Artist Y', duration: 180 }],
+  // Clean studio-cut title. This suite is about orchestration (dedupe/summary/cache), not scoring:
+  // qualifier-vs-studio-cut scoring is asserted in matcher.test.ts. A "(Live)" title here used to be
+  // a confident 'matched' and no longer is, which is correct but is not what this test is measuring.
+  'Song B Artist Y': [{ videoId: 'vidB', title: 'Song B', artists: 'Artist Y', duration: 180 }],
 };
 
 function fakeDeps(): PipelineDeps {

@@ -3,29 +3,65 @@
 <head>
   <meta charset="utf-8" />
   <style>
-    body { font: 13px/1.45 -apple-system, "Segoe UI", sans-serif; width: 340px; margin: 0; padding: 12px; }
+    body { font: 13px/1.45 -apple-system, "Segoe UI", sans-serif; width: 360px; margin: 0; padding: 12px; }
     h1 { font: 600 13px -apple-system, sans-serif; margin: 0 0 8px; }
     p { color: #555; margin: 0 0 10px; font-size: 12px; }
     button { width: 100%; padding: 8px; border: 0; border-radius: 4px; cursor: pointer;
              background: #fc0; color: #000; font-weight: 600; }
     button:disabled { background: #ddd; color: #888; cursor: wait; }
+    button.secondary { background: #eee; color: #333; font-weight: 500; }
+    button + button { margin-top: 6px; }
     #msg { white-space: pre-wrap; font: 11px/1.4 ui-monospace, monospace; background: #f5f5f5; padding: 8px;
-           border-radius: 4px; max-height: 220px; overflow: auto; }
-    #out { box-sizing: border-box; width: 100%; min-height: 150px; font: 11px/1.4 ui-monospace, monospace;
+           border-radius: 4px; margin-top: 8px; max-height: 160px; overflow: auto; }
+    #log { white-space: pre-wrap; font: 11px/1.4 ui-monospace, monospace; background: #f0f0f0; padding: 6px;
+           border-radius: 4px; margin-top: 8px; max-height: 90px; overflow: auto; }
+    #out { box-sizing: border-box; width: 100%; min-height: 110px; font: 11px/1.4 ui-monospace, monospace;
            margin-top: 8px; }
+    #server { box-sizing: border-box; width: 100%; padding: 6px; font: 11px/1.4 ui-monospace, monospace;
+              border: 1px solid #ddd; border-radius: 4px; margin-bottom: 6px; }
+    details { margin-top: 8px; }
+    summary { cursor: pointer; font-size: 12px; color: #555; }
+    #sum { font: 11px/1.4 ui-monospace, monospace; background: #f5f5f5; padding: 6px; border-radius: 4px;
+           margin: 6px 0; white-space: pre-wrap; }
+    #res { list-style: none; margin: 6px 0 0; padding: 0; max-height: 260px; overflow: auto; }
+    #res li { padding: 5px 6px; border-bottom: 1px solid #eee; font-size: 11px; }
+    #res a { color: #1155cc; text-decoration: none; }
+    #res .no { color: #999; }
+    #res .flag { color: #c60; font-weight: 700; }
+    #res .meta { color: #777; font: 10px/1.3 ui-monospace, monospace; }
+    .hidden { display: none; }
   </style>
 </head>
 <body>
   <h1>Scan current Yandex Music tab</h1>
-  <p>Open this popup while your logged-in music.yandex.ru tab shows a playlist or album. Reads rendered rows
-     (DOM only, no API/token → can never WAF-403, rule-honest). Copies track JSON to clipboard.</p>
-  <button id="scan">Scan tab → copy JSON</button>
-  <button id="openside" style="margin-top:6px">Open in side panel (drawer)</button>
-  <button id="copyJson" style="margin-top:6px">Copy JSON to clipboard</button>
-  <button id="stopScan" style="margin-top:6px">Stop parsing</button>
-  <div id="log" style="white-space:pre-wrap;font:11px/1.4 ui-monospace,monospace;background:#f0f0f0;padding:6px;border-radius:4px;margin-top:8px;max-height:160px;overflow:auto;">–– step log appears here as the walk goes ––</div>
+  <p>Open this while a music.yandex.ru playlist/album is rendered. Reads DOM rows only — no API, no
+     token, so it can never WAF-403. Then convert to YouTube Music links with your mush server.</p>
+  <button id="scan">1 · Scan tab</button>
+  <button id="convert" disabled>2 · Convert with mush → YouTube Music</button>
+
+  <details id="serverBox" style="margin-top:10px">
+    <summary>mush server</summary>
+    <input type="text" id="server" spellcheck="false" placeholder="http://127.0.0.1:8000">
+    <button id="saveServer" class="secondary">Save server URL</button>
+    <div class="meta" style="margin-top:4px">Default http://127.0.0.1:8000. An https:// host asks for
+      permission the first time you convert.</div>
+  </details>
+
   <div id="msg">idle — open a playlist or album first.</div>
-  <textarea id="out" rows="8" readonly placeholder="track JSON appears here, then copies to clipboard."></textarea>
+  <div id="sum" class="hidden"></div>
+  <ul id="res" class="hidden"></ul>
+  <button id="copyLinks" class="secondary hidden">Copy YouTube Music links</button>
+  <a id="openJob" class="hidden" style="display:block;margin-top:6px;font-size:12px" target="_blank">open full report ↗</a>
+
+  <details style="margin-top:10px">
+    <summary>raw JSON / step log</summary>
+    <button id="copyJson" class="secondary">Copy JSON to clipboard</button>
+    <button id="stopScan" class="secondary">Stop parsing</button>
+    <pre id="log">–– step log appears here as the walk goes ––</pre>
+    <textarea id="out" readonly placeholder="track JSON appears here, then copies to clipboard."></textarea>
+  </details>
+  <button id="openside" class="secondary">Open in side panel (drawer)</button>
   <script src="popup.js"></script>
 </body>
+</html>
 </html>

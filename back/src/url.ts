@@ -1,5 +1,4 @@
-export const MODES = ['playlist', 'liked', 'album', 'saved-albums', 'all-playlists'] as const;
-export type Mode = (typeof MODES)[number];
+export type Mode = 'playlist' | 'liked' | 'album' | 'json';
 
 import { logger } from './lib/logger.js';
 
@@ -47,6 +46,11 @@ export function parseUrl(url: string): YandexTarget {
 
 export function fromForm(mode: string, source: string): YandexTarget {
   source = source.trim();
+  // Track JSON from the browser extension: there is no Yandex URL to parse. The body is validated by
+  // the caller via parseTrackJson, which is the only thing that can actually reject it.
+  if (mode === 'json') {
+    return { mode: 'json' };
+  }
   const bareShare = /^lk\.[0-9a-fA-F-]{36}$/.exec(source)
     || /\/(lk\.[0-9a-fA-F-]{36})[\/?#]?/.exec(source.split('music.yandex')[1] ?? '');
   if (bareShare?.[1] || /^lk\.[0-9a-fA-F-]{36}$/.test(source)) {
@@ -68,7 +72,7 @@ export function fromForm(mode: string, source: string): YandexTarget {
     }
     return t;
   }
-  if (mode === 'liked' || mode === 'saved-albums' || mode === 'all-playlists') {
+  if (mode === 'liked') {
     let user = source;
     if (user.includes('/')) {
       const m = /\/users\/([^/?#&]+)/.exec(user);

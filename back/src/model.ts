@@ -7,7 +7,7 @@ export interface TrackMeta {
 }
 
 
-export type MatchStatus = 'matched' | 'uncertain' | 'not_found' | 'skipped_dup' | 'error';
+export type MatchStatus = 'matched' | 'uncertain' | 'not_found' | 'skipped_dup';
 
 export interface MatchResult {
   status: MatchStatus;
@@ -16,7 +16,6 @@ export interface MatchResult {
   ytTitle?: string | null;
   ytArtist?: string | null;
   ytDuration?: number | null;
-  query?: string | null;
 }
 
 export interface Candidate {
@@ -28,16 +27,11 @@ export interface Candidate {
 
 export interface Collection {
   title: string;
-  sourceUrl: string | null;
   tracks: TrackMeta[];
 }
 
 export function artistStr(track: TrackMeta): string {
   return track.artists.join(', ');
-}
-
-export function trackKey(track: TrackMeta): string {
-  return `${track.title}|${artistStr(track)}|${track.duration}`;
 }
 
 export function matchUsable(res: MatchResult): boolean {

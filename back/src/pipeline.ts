@@ -3,7 +3,8 @@ import PQueue from 'p-queue';
 import { settings } from './config.js';
 import type { Store } from './db.js';
 import { buildQueries, matchTrack } from './matcher.js';
-import { artistStr, matchUsable, type Candidate, type Collection, type MatchResult, type TrackMeta } from './model.js';
+import { matchUsable, artistStr, type Candidate, type Collection, type MatchResult, type TrackMeta } from './model.js';
+import { parseTrackJson } from './pasteJson.js';
 import { fromForm, type YandexTarget } from './url.js';
 import { fetchCollections as fetchCollectionsReal, YandexClient } from './yandex/client.js';
 import { searchSongs as searchSongsReal } from './ytmusic/search.js';
@@ -21,8 +22,12 @@ export const defaultDeps: PipelineDeps = {
   searchSongs: searchSongsReal,
 };
 
+// Bump this whenever scoring changes. match_cache stores the verdict AND the score, so without a
+// version in the key a scoring fix silently never reaches already-cached tracks.
+const SCORE_VERSION = 2;
+
 export function cacheKey(track: TrackMeta): string {
-  return crypto.createHash('sha1').update(`${track.title}|${artistStr(track)}|${track.duration}`).digest('hex');
+  return crypto.createHash('sha1').update(`v${SCORE_VERSION}|${track.title}|${artistStr(track)}|${track.duration}`).digest('hex');
 }
 
 export async function matchWithSearch(
@@ -57,18 +62,19 @@ export async function matchWithSearch(
     const result = matchTrack(track, candidates);
     if (best === null || result.score > best.score) {
       best = result;
-      best.query = query;
     }
     if (result.status === 'matched') {
       best = result;
-      best.query = query;
       break;
     }
   }
 
   if (!best) best = { status: 'not_found', score: 0 };
   logger.log('pipeline: match done', { status: best.status, score: best.score, videoId: best.videoId ?? null });
-  if (best.videoId) {
+  // Cache ONLY confident matches. An 'uncertain' result is a guess we already doubt: caching it
+  // froze a wrong low-confidence link forever and the track could never be re-searched, so a re-run
+  // could not improve it. Re-searching the few failures per run is cheap and lets them recover.
+  if (best.videoId && best.status === 'matched') {
     await store.cachePut(key, best.videoId, best.ytTitle ?? '', best.ytArtist ?? '', best.ytDuration ?? null, best.score);
   }
   return best;
@@ -143,7 +149,11 @@ export async function runJob(store: Store, jobId: string, mode: string, source: 
   try {
     await store.setJob(jobId, { status: 'running' });
     const target = fromForm(mode, source);
-    const collections = await deps.fetchCollections(target);
+    // Pasted extension JSON: no Yandex request at all. That is the whole point of this mode — the
+    // Yandex API is unreachable from here, and the tracks are already in hand.
+    const collections: Collection[] = target.mode === 'json'
+      ? [{ title: 'Pasted track JSON', tracks: parseTrackJson(source).tracks }]
+      : await deps.fetchCollections(target);
     const queue = new PQueue({ concurrency: settings.searchConcurrency });
     const summaries: Record<string, unknown>[] = [];
     let idx = 0;
@@ -160,7 +170,10 @@ export async function runJob(store: Store, jobId: string, mode: string, source: 
 }
 
 export async function startJob(store: Store, mode: string, source: string, deps: PipelineDeps = defaultDeps): Promise<string> {
-  const id = await store.createJob(mode, source);
+  // jobs.source is printed verbatim on the job page, so store a short label instead of the whole
+  // pasted blob. runJob still gets the full text by argument.
+  const stored = mode === 'json' ? `pasted JSON, ${parseTrackJson(source).tracks.length} tracks` : source;
+  const id = await store.createJob(mode, stored);
   void runJob(store, id, mode, source, deps);
   return id;
 }

@@ -54,6 +54,22 @@ describe('matchTrack', () => {
     expect(['uncertain', 'not_found']).toContain(res.status);
   });
 
+  it('prefers the studio cut over a same-title remix', () => {
+    const track = meta("I Don't Feel Like Dancin'", ['Scissor Sisters'], 287);
+    const remix = cand('bad', "I Don't Feel Like Dancin' (Teenage Bad Girl Remix)", 'Scissor Sisters', 284);
+    const real = cand('good', "I Don't Feel Like Dancin'", 'Scissor Sisters', 289);
+    const res = matchTrack(track, [remix, real]);
+    expect(res.videoId).toBe('good');
+    expect(res.status).toBe('matched');
+  });
+
+  it('does not penalize a remaster, which is the same recording', () => {
+    const res = matchTrack(meta('Bohemian Rhapsody', ['Queen'], 355), [
+      cand('v', 'Bohemian Rhapsody (Remastered 2011)', 'Queen', 355),
+    ]);
+    expect(res.score).toBe(1);
+  });
+
   it('handles empty candidates', () => {
     const res = matchTrack(meta('Nothing', ['Nobody'], 200), []);
     expect(res.status).toBe('not_found');

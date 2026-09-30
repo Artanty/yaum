@@ -1,6 +1,6 @@
 {
   "name": "mush",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "Yandex Music -> YouTube Music playlist converter (links)",
   "type": "module",
   "engines": {
@@ -17,6 +17,7 @@
   "dependencies": {
     "@fastify/formbody": "^8.0.2",
     "@fastify/view": "^11.0.3",
+    "axios": "^1.7.2",
     "dotenv": "^17.2.3",
     "ejs": "^3.1.10",
     "fastify": "^5.6.1",
@@ -30,7 +31,6 @@
   "devDependencies": {
     "@types/ejs": "^3.1.5",
     "@types/node": "^24.10.1",
-    "playwright": "^1.63.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
   }

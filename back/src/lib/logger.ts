@@ -31,13 +31,11 @@
  */
 import { appendFile, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export type LogLevel = 'log' | 'warn' | 'error';
 export type LogType = 'app' | 'error' | 'all';
-/** which files clearLogs() removes: 'log' -> app.log*, 'error' -> error.log*, 'all' -> both */
-export type ClearType = 'log' | 'error' | 'all';
 
 export interface LogEntry {
   ts: string;
@@ -208,40 +206,6 @@ export class Logger {
   }
 
   /**
-   * Write a single JSON line to an additional file inside LOG_DIR (e.g. a
-   * 'startup' record to 'app.strat.log'). Same rotation policy as app.log.
-   */
-  logToFile(filename: string, msg: string, data?: unknown, level: LogLevel = 'log', fn?: string): void {
-    if (!this.enabled) return;
-    const file = join(this.dir, filename);
-    const entry = this.build(level, msg, data, undefined, fn);
-    void this.enqueue(async () => {
-      await this.rotateIfNeeded(file);
-      await appendFile(file, `${JSON.stringify(entry)}\n`, 'utf8');
-    });
-  }
-
-  /**
-   * Delete log files. 'log' clears app.log (+ rotated), 'error' clears
-   * error.log (+ rotated), 'all' (default) clears both. Flushes pending
-   * writes first so nothing is lost, and holds the queue so a concurrent
-   * append can't recreate a file mid-clear.
-   */
-  async clearLogs(type: ClearType = 'all'): Promise<void> {
-    await this.flush();
-    await this.enqueue(async () => {
-      const files: string[] = [];
-      const add = (base: string): void => {
-        files.push(base);
-        for (let i = 1; i <= this.maxFiles; i++) files.push(`${base}.${i}`);
-      };
-      if (type === 'log' || type === 'all') add(this.appFile);
-      if (type === 'error' || type === 'all') add(this.errorFile);
-      for (const f of files) await rm(f, { force: true });
-    });
-  }
-
-  /**
    * errOrData: pass an Error (stack is captured) or arbitrary data.
    * If it is an error-like object with a stack it is treated as an Error.
    */
@@ -339,5 +303,3 @@ export class Logger {
 
 /** Shared singleton for the app; create your own Logger() per project/file if needed. */
 export const logger = new Logger();
-
-export default logger;

@@ -95,10 +95,6 @@ export class Store {
     }
   }
 
-  async close(): Promise<void> {
-    await this.pool.end();
-  }
-
   async createJob(mode: string, source: string): Promise<string> {
     const id = crypto.randomUUID().replace(/-/g, '').slice(0, 12);
     const now = Date.now() / 1000;
