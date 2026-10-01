@@ -21,6 +21,9 @@
   // a second pass over the same rows below would be redundant work.
   const ACC = new Map();
   let stopped = false;
+  // Walk-level step counter: down() and up() keep their own local counts, and the log needs one
+  // number for "how far did the walk get" when a scan is cut short.
+  let steps = 0;
   const absorb = () => {
     for (const s of seen()) {
       if (!ACC.has(s.title)) ACC.set(s.title, s);
@@ -48,6 +51,22 @@
     chrome.runtime.sendMessage({ type: "SCAN_STEP", names: items.slice(-10).map((t) => t.title), items }).catch(() => {});
   };
 
+  // A content script has no chrome.storage access worth relying on and no popup to show a trace in,
+  // so it hands its entries to the popup over the same SCAN_STEP channel the walk already uses.
+  // If the popup is closed the popup simply misses them — logging must never break the walk.
+  const trace = (level, msg, data) => {
+    try {
+      const send =
+        level === "error" ? yaumLog.error : level === "warn" ? yaumLog.warn : yaumLog.info;
+      send("content", msg, data);
+      chrome.runtime
+        .sendMessage({ type: "SCAN_LOG", level, msg, data })
+        .catch(() => {});
+    } catch {
+      /* logging must never break the walk */
+    }
+  };
+
   const down = (scroller) => new Promise((resolve) => {
     scroller.scrollTop = 0;
     absorb();
@@ -64,6 +83,7 @@
         steps += 1;
         return tick();
       }
+      trace("debug", "down pass finished", { steps, collected: ACC.size, atBottom });
       resolve();
     };
     tick();
@@ -78,6 +98,7 @@
       await collectWithRetry();
       emit();
       if (scroller.scrollTop <= 0 || steps >= maxSteps) {
+        trace("debug", "up pass finished", { steps, collected: ACC.size });
         resolve();
         return;
       }
@@ -90,7 +111,13 @@
 
   const walk = async () => {
     const scroller = document.querySelector(SCROLLER_SEL);
-    if (!scroller) return [...ACC.values()];
+    // No virtualised scroller (short playlist, or a layout we don't recognise): there is nothing
+    // to scroll through, so just read what is already rendered. This must still absorb() — the
+    // early return used to skip it and hand back zero tracks for a page full of them.
+    if (!scroller) {
+      absorb();
+      return [...ACC.values()];
+    }
     // FIRST RUN: top -> bottom, collecting everything that renders.
     await down(scroller);
     // SECOND RUN: bottom -> top, ADD MISSED ITEMS (re-rendered rows that skipped before).
@@ -100,11 +127,46 @@
   };
 
   chrome.runtime.onMessage.addListener((msg, _sender, sr) => {
-    if (msg?.type === "SCAN_STOP") { stopped = true; sr({ ok: true }); return; }
+    if (msg?.type === "SCAN_STOP") {
+      stopped = true;
+      trace("warn", "stop requested by the user", { collected: ACC.size });
+      sr({ ok: true });
+      return;
+    }
     if (msg?.type !== "SCAN") return;
     stopped = false;
     ACC.clear();
-    walk().then((t) => sr({ ok: true, data: { tracks: t, count: t.length } })).catch((e) => sr({ ok: false, error: String(e?.message ?? e) }));
+    steps = 0;
+
+    // The three things that decide whether a scan works at all, logged up front so a failure names
+    // its cause instead of just reporting zero: was the script even in the right page, is there a
+    // scroller to walk, and does the page have any track rows right now?
+    trace("info", "SCAN received", {
+      url: location.href.slice(0, 200),
+      scroller: (() => {
+        const s = document.querySelector(SCROLLER_SEL);
+        return s ? { found: true, scrollHeight: s.scrollHeight, clientHeight: s.clientHeight } : { found: false };
+      })(),
+      trackRows: document.querySelectorAll(TRACK_LIKE).length,
+    });
+
+    walk()
+      .then((t) => {
+        trace("info", "SCAN finished", { tracks: t.length, stopped, steps });
+        if (!t.length) {
+          // The single most common confusing outcome, called out explicitly.
+          trace(
+            "warn",
+            "SCAN collected 0 tracks — selectors matched nothing, or the list is not rendered yet",
+            { trackRows: document.querySelectorAll(TRACK_LIKE).length, url: location.href.slice(0, 200) },
+          );
+        }
+        sr({ ok: true, data: { tracks: t, count: t.length } });
+      })
+      .catch((e) => {
+        trace("error", "SCAN threw", { message: String(e?.message ?? e), stack: e?.stack });
+        sr({ ok: false, error: String(e?.message ?? e) });
+      });
     return true;
   });
 })();

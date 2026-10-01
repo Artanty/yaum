@@ -2,13 +2,18 @@ import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
 import formbody from '@fastify/formbody';
 import view from '@fastify/view';
+import cors from '@fastify/cors';
 import ejs from 'ejs';
 import { settings } from './config.js';
-import { openStore, type Store } from './db.js';
+import { openStore, buildPool, type Store } from './db.js';
 import { startJob } from './pipeline.js';
 import { parseTrackJson } from './pasteJson.js';
 import { fromForm } from './url.js';
 import { logger } from './lib/logger.js';
+import { initLibrary } from './library/schema.js';
+import { LibraryStore, SEED_USERS } from './library/store.js';
+import { registerLibraryRoutes, LIBRARY_PREFIX } from './library/routes.js';
+import { describeProvider, NULL_GENRE_PROVIDER } from './library/genre.js';
 
 
 
@@ -16,7 +21,7 @@ const viewsRoot = fileURLToPath(new URL('../views/', import.meta.url));
 
 const apiPrefix = process.env.API_PREFIX ?? '/api';
 
-export function buildApp(store: Store) {
+export function buildApp(store: Store, library?: LibraryStore) {
   const app = Fastify({ logger: false });
   const healthEnvs = {
     YANDEX_TOKEN: Boolean(settings.yandexToken),
@@ -25,16 +30,49 @@ export function buildApp(store: Store) {
   };
   const requestLogSkipPrefixes = [`${apiPrefix}/get-updates`];
 
+  // The Angular shell polls these on a timer, and the extension's popup re-reads some of them.
+  // Logging every one buries the handful of lines that matter (a scan, a 4xx, a mutation) in
+  // hundreds of identical GETs — which is exactly what happened before this existed. Skipped
+  // requests are counted, and the totals are logged at startup, so a quiet log is never mistaken
+  // for "the server did nothing". LOG_SKIP_POLL=off restores one line per request.
+  const skipPoll = process.env.LOG_SKIP_POLL !== 'off';
+  const POLL_EXACT = new Set([
+    '/me',
+    '/notifications',
+    '/users',
+    '/songs',
+    '/playlists',
+    '/imports/pending',
+    '/healthz',
+  ]);
+  const isPoll = (url: string): boolean => {
+    if (!skipPoll) return false;
+    const path = url.split('?')[0].replace(/\/+$/, '');
+    if (LIBRARY_PREFIX && path === `${LIBRARY_PREFIX}`) return false;
+    return path.startsWith(`${LIBRARY_PREFIX}/`) && POLL_EXACT.has(path.slice(LIBRARY_PREFIX.length));
+  };
+  let skippedPolls = 0;
+  let loggedOther = 0;
+
   app.addHook('preHandler', async (request) => {
     try {
       if (requestLogSkipPrefixes.some((prefix) => request.url.startsWith(prefix))) return;
+      if (isPoll(request.url)) {
+        skippedPolls += 1;
+        return;
+      }
+      loggedOther += 1;
       logger.log(`HTTP ${request.method} ${request.url}`, {
         method: request.method,
         url: request.url,
         ip: request.ip,
         params: request.params,
         query: request.query,
-      });
+        // A scan is the one POST worth being able to trace end to end from the log alone.
+        tracks: Array.isArray((request.body as { tracks?: unknown[] } | undefined)?.tracks)
+          ? (request.body as { tracks: unknown[] }).tracks.length
+          : undefined,
+      }, 'preHandler');
     } catch (err) {
       logger.error('request-logging hook failed', err instanceof Error ? err : new Error(String(err)), 'preHandler');
     }
@@ -43,6 +81,49 @@ export function buildApp(store: Store) {
   app.addHook('onError', async (request, _reply, error) => {
     logger.error(`HTTP ${request.method} ${request.url} failed`, error, 'onError');
   });
+
+  // The outcome line. Without it the log says a request ARRIVED and nothing about whether it
+  // worked — so "it did nothing" and "it worked" look identical in the file.
+  app.addHook('onResponse', async (request, reply) => {
+    try {
+      if (isPoll(request.url)) return;
+      const ms = Math.round(reply.elapsedTime);
+      const line = `-> ${reply.statusCode} ${request.method} ${request.url} in ${ms}ms`;
+      if (reply.statusCode >= 500) logger.error(line, undefined, 'onResponse');
+      else if (reply.statusCode >= 400) logger.warn(line, undefined, 'onResponse');
+      else logger.log(line, undefined, 'onResponse');
+    } catch (err) {
+      logger.error('response-logging hook failed', err instanceof Error ? err : new Error(String(err)), 'onResponse');
+    }
+  });
+
+  // Reported once the app is listening, so the skip counters are never a silent unknown.
+  app.addHook('onReady', async () => {
+    logger.log('server ready', {
+      pollLogging: skipPoll ? 'suppressed (LOG_SKIP_POLL=off to log every request)' : 'every request',
+      logDir: process.env.LOG_DIR ?? 'logs',
+      consoleMirror: process.env.LOG_CONSOLE !== 'off',
+      fileWriting: process.env.LOG_DISABLED !== 'true',
+    }, 'onReady');
+  });
+
+  // Reported on demand rather than from a hook: app.addHook('onClose') does NOT fire on
+  // SIGINT/SIGTERM, so a plain Ctrl-C never reaches it. The startup block below calls this from a
+  // real signal handler, and the logs endpoint exposes it while the server is up.
+  const reportSkipCounters = async (why: string) => {
+    if (!skipPoll || skippedPolls === 0) return;
+    logger.log('library: poll requests suppressed so far', {
+      skippedPolls,
+      loggedRequests: loggedOther,
+      why,
+    });
+    // The file write is async, so awaiting it is the difference between this line existing and not.
+    // Without this the report is printed to the console and then lost on process.exit() — i.e.
+    // missing from the log file on every Ctrl-C, which is exactly when someone reads the log.
+    await logger.flush();
+  };
+  app.decorate('reportSkipCounters', reportSkipCounters);
+  app.decorate('skipPollStats', () => ({ skipPoll, skippedPolls, loggedRequests: loggedOther }));
 
   app.setNotFoundHandler((request, reply) => {
     logger.warn(`HTTP ${request.method} ${request.url} -> 404`, undefined, 'notFound');
@@ -53,6 +134,16 @@ export function buildApp(store: Store) {
     engine: { ejs },
     root: viewsRoot,
   });
+  // The Angular dev server is a different origin, so the library API needs CORS for it. The mush
+  // endpoints do not: the extension posts application/x-www-form-urlencoded, which is
+  // CORS-safelisted and was already working without this. Only JSON callers (ng serve, and the
+  // library API) benefit.
+  app.register(cors, {
+    origin: true,
+    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  });
+
+  if (library) registerLibraryRoutes(app, library);
 
   app.get('/', async (_req, reply) => {
     return reply.view('index.ejs', {});
@@ -154,12 +245,39 @@ export function buildApp(store: Store) {
 }
 
 const store = await openStore();
-const app = buildApp(store);
+// The library shares the mush DB (same DB_* env, same schema file) but gets its own pool: Store's
+// pool is private, and a second 10-connection pool to one database is well under MySQL's default
+// max_connections. initLibrary runs on the SAME pool the store will query, so the schema is
+// guaranteed to exist before the first request rather than being raced by two pools.
+const libraryPool = buildPool();
+const library = new LibraryStore(libraryPool);
+await initLibrary(libraryPool);
+await library.seedUsers(SEED_USERS);
+describeProvider(NULL_GENRE_PROVIDER);
+const app = buildApp(store, library);
 
 const host = settings.host;
 const port = Number(process.env.PORT ?? 8000);
 
 if (process.argv[1]?.endsWith('server.ts') || process.argv[1]?.endsWith('server.js') || process.env.MUSH_RUN === '1') {
+  // Registered here, not inside buildApp, so importing the app in tests cannot leak signal
+  // listeners. A timer backs this up because the counters are also worth seeing while running.
+  const skipTimer = setInterval(() => void app.reportSkipCounters('periodic'), 5 * 60_000);
+  skipTimer.unref?.();
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.once(signal, () => {
+      // Force-exit guard: a hung connection must not make Ctrl-C look like a freeze.
+      const bail = setTimeout(() => process.exit(0), 3000);
+      bail.unref?.();
+      // The report is flushed BEFORE close/exit, so the count is in the log file and not just on
+      // this terminal — see reportSkipCounters.
+      void app
+        .reportSkipCounters(`shutdown (${signal})`)
+        .catch(() => {})
+        .then(() => app.close())
+        .finally(() => process.exit(0));
+    });
+  }
   app.listen({ host, port }).catch((err) => {
     console.error(err);
     process.exit(1);

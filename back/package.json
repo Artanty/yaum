@@ -1,6 +1,6 @@
 {
   "name": "mush",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "description": "Yandex Music -> YouTube Music playlist converter (links)",
   "type": "module",
   "engines": {
@@ -10,11 +10,13 @@
     "dev": "npx tsx watch src/server.ts",
     "build": "tsc",
     "start": "npx tsx src/server.ts",
+    "logs": "node scripts/logs.mjs",
     "match": "tsx src/cli.ts match",
     "test": "vitest run",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@fastify/cors": "^11.3.0",
     "@fastify/formbody": "^8.0.2",
     "@fastify/view": "^11.0.3",
     "axios": "^1.7.2",

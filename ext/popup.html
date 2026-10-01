@@ -17,6 +17,8 @@
            border-radius: 4px; margin-top: 8px; max-height: 90px; overflow: auto; }
     #out { box-sizing: border-box; width: 100%; min-height: 110px; font: 11px/1.4 ui-monospace, monospace;
            margin-top: 8px; }
+    #diaglog { white-space: pre-wrap; font: 10px/1.35 ui-monospace, monospace; background: #f0f0f4;
+               padding: 6px; border-radius: 4px; margin: 6px 0 0; max-height: 190px; overflow: auto; }
     #server { box-sizing: border-box; width: 100%; padding: 6px; font: 11px/1.4 ui-monospace, monospace;
               border: 1px solid #ddd; border-radius: 4px; margin-bottom: 6px; }
     details { margin-top: 8px; }
@@ -35,19 +37,27 @@
 <body>
   <h1>Scan current Yandex Music tab</h1>
   <p>Open this while a music.yandex.ru playlist/album is rendered. Reads DOM rows only — no API, no
-     token, so it can never WAF-403. Then convert to YouTube Music links with your mush server.</p>
+     token, so it can never WAF-403. Then save the tracks to your yaum library, or convert them to
+     YouTube Music links with your mush server.</p>
   <button id="scan">1 · Scan tab</button>
-  <button id="convert" disabled>2 · Convert with mush → YouTube Music</button>
+  <button id="import" disabled>2 · Import into my library</button>
+  <button id="convert" disabled>3 · Convert with mush → YouTube Music</button>
 
   <details id="serverBox" style="margin-top:10px">
-    <summary>mush server</summary>
+    <summary>server &amp; user</summary>
     <input type="text" id="server" spellcheck="false" placeholder="http://127.0.0.1:8000">
     <button id="saveServer" class="secondary">Save server URL</button>
-    <div class="meta" style="margin-top:4px">Default http://127.0.0.1:8000. An https:// host asks for
-      permission the first time you convert.</div>
+    <label style="display:block;margin-top:8px;font-size:12px;color:#555">
+      scanning as user id
+      <input type="number" id="userId" min="1" step="1" style="width:70px">
+    </label>
+    <div class="meta" style="margin-top:4px">Default http://127.0.0.1:8000, user 1. An https:// host asks
+      for permission the first time you convert.</div>
   </details>
 
   <div id="msg">idle — open a playlist or album first.</div>
+  <p style="margin:6px 0 0">Scanning only reads the page. Nothing is saved until you press
+    <b>2 · Import into my library</b> — that is the step that writes to the database.</p>
   <div id="sum" class="hidden"></div>
   <ul id="res" class="hidden"></ul>
   <button id="copyLinks" class="secondary hidden">Copy YouTube Music links</button>
@@ -61,7 +71,20 @@
     <textarea id="out" readonly placeholder="track JSON appears here, then copies to clipboard."></textarea>
   </details>
   <button id="openside" class="secondary">Open in side panel (drawer)</button>
+
+  <details style="margin-top:10px">
+    <summary>diagnostics log</summary>
+    <p style="margin:0 0 6px">Kept across popup closes. Paste this into a bug report — it holds
+      the last 300 events, including every request and its status.</p>
+    <button id="shipLog" class="secondary">Upload logs to server</button>
+    <button id="copyLog" class="secondary">Copy logs to clipboard</button>
+    <button id="openLog" class="secondary">Open full log</button>
+    <button id="clearLog" class="secondary">Clear</button>
+    <pre id="logship">not sent yet</pre>
+    <pre id="diaglog">–– log appears here ––</pre>
+  </details>
+  <script src="log.js"></script>
+  <script src="ship.js"></script>
   <script src="popup.js"></script>
 </body>
-</html>
 </html>

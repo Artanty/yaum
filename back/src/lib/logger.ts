@@ -8,10 +8,20 @@
  *   LOG_MAX_BYTES  (default: 1_000_000  — rotate a file once it exceeds this size)
  *   LOG_MAX_FILES  (default: 5          — keep this many rotated files)
  *   LOG_DISABLED   ('true' to turn off file writing)
+ *   LOG_CONSOLE    ('off' to stop mirroring entries to the console; default: mirror)
+ *   LOG_SKIP_POLL  ('off' to log every request; default: drop high-frequency read-only polls)
  *
  * Files:
  *   <LOG_DIR>/app.log       — log + warn entries
  *   <LOG_DIR>/error.log     — error entries
+ *
+ * Console mirror: every entry is also printed as one compact line
+ * (`HH:MM:SS.mmm LEVEL fn msg {json data}`), because a dev run that writes only to a file looks
+ * completely silent and "silent" reads as "nothing happened".
+ *
+ * Poll suppression: the Angular shell polls /me and /notifications on a timer, which drowns the
+ * log in noise. Those URLs are dropped from the request log, but every drop is counted and the
+ * total is logged once at startup, so a quiet log can never be mistaken for an idle server.
  *
  * Rotation: when a file exceeds LOG_MAX_BYTES it is renamed to <name>.1, the
  * previous .1 becomes .2, ..., and <name>.N is removed. Rotation happens on
@@ -53,6 +63,8 @@ export interface LoggerOptions {
   maxBytes?: number;
   maxFiles?: number;
   enabled?: boolean;
+  /** mirror entries to the console as well as the file (default true, LOG_CONSOLE=off to disable) */
+  console?: boolean;
 }
 
 export interface GetLogsOptions {
@@ -66,6 +78,8 @@ export interface GetLogsOptions {
   type?: LogType;
   /** mask values of known-sensitive keys before returning */
   hideSensitive?: boolean;
+  /** read this process's in-memory ring instead of the log files */
+  memory?: boolean;
 }
 
 const SENSITIVE_KEY_RE =
@@ -105,7 +119,12 @@ export class Logger {
   private readonly maxBytes: number;
   private readonly maxFiles: number;
   private readonly enabled: boolean;
+  private readonly toConsole: boolean;
   private queued: Promise<void> = Promise.resolve();
+
+  /** Entries held in memory so a reader never has to hit the disk. */
+  private readonly recent: LogEntry[] = [];
+  private static readonly RECENT_MAX = 500;
 
   constructor(opts: LoggerOptions = {}) {
     this.dir = opts.dir ?? process.env.LOG_DIR ?? join(process.cwd(), 'logs');
@@ -114,9 +133,37 @@ export class Logger {
     this.maxBytes = opts.maxBytes ?? (Number(process.env.LOG_MAX_BYTES) || 1_000_000);
     this.maxFiles = opts.maxFiles ?? (Number(process.env.LOG_MAX_FILES) || 5);
     this.enabled = opts.enabled ?? process.env.LOG_DISABLED !== 'true';
+    this.toConsole = opts.console ?? process.env.LOG_CONSOLE !== 'off';
     mkdir(this.dir, { recursive: true }).catch((err) =>
       console.error('[logger] cannot create log dir:', err)
     );
+  }
+
+  /**
+   * One compact line for the terminal. Deliberately NOT the raw JSON: the file has that, and a
+   * human reading a dev server wants `scan imported 2 new` at a glance, with data beside it only
+   * when there is data.
+   */
+  private print(entry: LogEntry): void {
+    const time = entry.ts.slice(11, 23);
+    const level = entry.level.toUpperCase().padEnd(5);
+    let line = `${time} ${level} ${entry.msg}`;
+    if (entry.fn && entry.fn !== 'unknown') line += `  (${entry.fn})`;
+    if (entry.data !== undefined) {
+      try {
+        line += ` ${JSON.stringify(entry.data)}`;
+      } catch {
+        line += ' [unserializable data]';
+      }
+    }
+    if (entry.level === 'error') {
+      console.error(line);
+      if (entry.stack) console.error(entry.stack);
+    } else if (entry.level === 'warn') {
+      console.warn(line);
+    } else {
+      console.log(line);
+    }
   }
 
   /**
@@ -147,6 +194,11 @@ export class Logger {
   }
 
   private async emit(entry: LogEntry): Promise<void> {
+    // The console mirror and the in-memory ring are independent of the file: LOG_DISABLED turns
+    // off file writing, and that must not also blind a dev run or the HTTP log endpoint below.
+    this.recent.push(entry);
+    if (this.recent.length > Logger.RECENT_MAX) this.recent.splice(0, this.recent.length - Logger.RECENT_MAX);
+    if (this.toConsole) this.print(entry);
     if (!this.enabled) return;
     const line = JSON.stringify(entry);
     const file = entry.level === 'error' ? this.errorFile : this.appFile;
@@ -274,10 +326,13 @@ export class Logger {
    *   last    -> only the N most recent matching entries
    *   type    -> 'app' | 'error' | 'all'
    *   hideSensitive -> mask sensitive keys in `data` before returning
+   *   memory  -> read the in-memory ring instead of the files. The ring only holds this process's
+   *              entries, so it is the right choice for "what just happened"; the files are the
+   *              right choice for history across restarts.
    */
   async getLogs(opts: GetLogsOptions = {}): Promise<LogEntry[]> {
     await this.flush();
-    let entries = await this.readFiles(opts.type ?? 'all');
+    let entries = opts.memory ? [...this.recent] : await this.readFiles(opts.type ?? 'all');
 
     if (opts.from || opts.to) {
       const from = opts.from ? opts.from.getTime() : -Infinity;

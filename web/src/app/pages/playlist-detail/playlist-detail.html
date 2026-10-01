@@ -1,0 +1,141 @@
+@if (playlist(); as p) {
+  <section class="head">
+    <a class="back" routerLink="/playlists">← playlists</a>
+
+    <div class="titleRow">
+      @if (editingName()) {
+        <input
+          class="rename"
+          type="text"
+          [ngModel]="draftName()"
+          (ngModelChange)="draftName.set($event)"
+          aria-label="Playlist name"
+        />
+        <button class="primary" [disabled]="busy()" (click)="commitRename()">Save</button>
+        <button class="ghost" (click)="cancelRename()">Cancel</button>
+      } @else {
+        <h1>{{ p.name }}</h1>
+        @if (p.can_edit) {
+          <button class="ghost" (click)="startRename()">rename</button>
+        }
+      }
+    </div>
+
+    <p class="meta">
+      by {{ p.owner_username }} · {{ items().length }} tracks ·
+      @if (p.can_edit) {
+        you can edit
+      } @else {
+        <span class="ro">view only</span>
+      }
+      · updated {{ timeAgo(p.updated_at) }}
+    </p>
+
+    @if (message()) {
+      <p class="note">{{ message() }}</p>
+    }
+  </section>
+
+  @if (isOwner()) {
+    <section class="share">
+      <h2>Shared with</h2>
+      <ul class="people">
+        @for (c of collaborators(); track c.user_id) {
+          <li>
+            <span>{{ c.display_name || c.username }}</span>
+            <span class="role">{{ c.can_edit ? 'can edit' : 'view only' }}</span>
+            <button class="ghost" (click)="unshare(c.user_id)">remove</button>
+          </li>
+        } @empty {
+          <li class="muted">not shared with anyone</li>
+        }
+      </ul>
+
+      @if (shareOpen()) {
+        <div class="shareForm">
+          <select [ngModel]="shareUserId()" (ngModelChange)="shareUserId.set($event)" aria-label="Share with user">
+            <option [ngValue]="null">pick a user…</option>
+            @for (u of session.users(); track u.id) {
+              @if (u.id !== meId()) {
+                <option [ngValue]="u.id">{{ u.display_name || u.username }}</option>
+              }
+            }
+          </select>
+          <label class="check">
+            <input type="checkbox" [ngModel]="shareCanEdit()" (ngModelChange)="shareCanEdit.set($event)" />
+            can edit
+          </label>
+          <button class="primary" [disabled]="busy() || shareUserId() === null" (click)="share()">Share</button>
+          <button class="ghost" (click)="shareOpen.set(false)">cancel</button>
+        </div>
+      } @else {
+        <button class="ghost" (click)="shareOpen.set(true)">+ share this playlist</button>
+      }
+
+      @if (isOwner()) {
+        <button class="danger" (click)="confirmDelete()">delete playlist</button>
+      }
+    </section>
+  }
+
+  @if (p.can_edit) {
+    <section class="picker">
+      <h2>Add tracks</h2>
+      <div class="pickerRow">
+        <input
+          type="search"
+          placeholder="find a song by title or artist…"
+          [ngModel]="pickerQuery()"
+          (ngModelChange)="pickerQuery.set($event)"
+          aria-label="Find a track to add"
+        />
+        <button class="primary" [disabled]="busy() || picked().size === 0" (click)="addPicked()">
+          Add {{ picked().size ? '(' + picked().size + ')' : '' }}
+        </button>
+      </div>
+
+      @if (pickerQuery().trim()) {
+        <ul class="found">
+          @for (s of candidates.value()?.songs ?? []; track s.id) {
+            <li>
+              <label>
+                <input type="checkbox" [checked]="isPicked(s.id)" (change)="togglePick(s.id)" />
+                <span class="t">{{ s.title }}</span>
+                <span class="a">
+                  @for (ar of s.artists; track ar.id) {
+                    <span>{{ ar.name }}</span>
+                  }
+                </span>
+              </label>
+            </li>
+          } @empty {
+            <li class="muted">nothing matches “{{ pickerQuery() }}”</li>
+          }
+        </ul>
+      }
+    </section>
+  }
+
+  <ol class="tracks">
+    @for (item of items(); track item.id) {
+      <li>
+        <span class="pos">{{ item.position + 1 }}</span>
+        <span class="t">{{ item.song.title }}</span>
+        <span class="a">{{ artistCredit(item.song) }}</span>
+        <span class="al">{{ item.song.album_title ?? '' }}</span>
+        <span class="d">{{ durationText(item.song.duration_s) }}</span>
+        <span class="by" [title]="'added by ' + item.added_by_username">+{{ item.added_by_username }}</span>
+        @if (p.can_edit) {
+          <button class="x" (click)="remove(item.id)" [attr.aria-label]="'Remove ' + item.song.title">×</button>
+        }
+      </li>
+    } @empty {
+      <li class="muted">No tracks yet.</li>
+    }
+  </ol>
+}
+@if (showLoading()) {
+  <p class="muted">loading…</p>
+} @else if (loadError(); as e) {
+  <p class="err">could not load this playlist: {{ e.message }}</p>
+}

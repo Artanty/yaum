@@ -66,6 +66,12 @@
         }
       };
 
+      // A real Yandex page re-renders its rows when the scroller moves. Wire that up so the
+      // shipped content.js can drive this fixture by scrolling alone, instead of only working
+      // when the walk below happens to call virtualize() itself.
+      scroller.addEventListener("scroll", virtualize);
+      virtualize();
+
       const seenOnce = () => {
         const out = [];
         const uniq = new Set();

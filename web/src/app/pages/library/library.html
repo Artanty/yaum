@@ -1,0 +1,101 @@
+<section class="head">
+  <h1>Library</h1>
+  <input
+    class="search"
+    type="search"
+    placeholder="search by title or artist…"
+    [ngModel]="search"
+    (ngModelChange)="search = $event"
+    aria-label="Search the library by title or artist"
+  />
+  @if (hasFilters()) {
+    <button class="ghost" (click)="clear()">clear filters</button>
+  }
+</section>
+
+<section class="facets">
+  <div class="facet">
+    <h2>Genres</h2>
+    @if (genres.value()?.genres?.length) {
+      <div class="chips">
+        @for (g of genres.value()!.genres; track g.id) {
+          <button class="chip" [class.on]="api.genreFilter() === g.id" (click)="filterGenre(g.id)">
+            {{ g.name }} <span class="n">{{ g.song_count }}</span>
+          </button>
+        }
+      </div>
+    } @else {
+      <p class="muted">
+        No genres yet. The table and the filter are ready — a genre provider just has not filled it in.
+      </p>
+    }
+  </div>
+
+  <div class="facet">
+    <h2>Artists</h2>
+    <div class="chips scroll">
+      @for (a of artists.value()?.artists ?? []; track a.id) {
+        <button class="chip" [class.on]="api.artistFilter() === a.id" (click)="filterArtist(a.id)">{{ a.name }}</button>
+      } @empty {
+        <p class="muted">nothing scanned yet</p>
+      }
+    </div>
+  </div>
+
+  <div class="facet">
+    <h2>Albums</h2>
+    <div class="chips scroll">
+      @for (al of albums.value()?.albums ?? []; track al.id) {
+        <button class="chip" [class.on]="api.albumFilter() === al.id" (click)="filterAlbum(al.id)">
+          {{ al.title }} <span class="n">{{ al.song_count }}</span>
+        </button>
+      } @empty {
+        <p class="muted">nothing scanned yet</p>
+      }
+    </div>
+  </div>
+</section>
+
+@if (songs.isLoading()) {
+  <p class="muted">loading…</p>
+} @else if (songs.error()) {
+  <p class="err">could not load the library: {{ songs.error()?.message }}</p>
+} @else {
+  <p class="count">
+    @if (total() === 0) {
+      nothing here yet — scan a playlist in the extension, then press “Import to my library”.
+    } @else {
+      showing {{ from() }}–{{ to() }} of {{ plural(total(), 'song') }}
+    }
+  </p>
+
+  <table class="songs">
+    <thead>
+      <tr>
+        <th>Title</th>
+        <th>Artists</th>
+        <th>Album</th>
+        <th class="num">Time</th>
+        <th class="num">Seen</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (s of songs.value()?.songs ?? []; track s.id) {
+        <tr>
+          <td class="title">{{ s.title }}</td>
+          <td class="artists">{{ artistCredit(s) }}</td>
+          <td class="album">{{ s.album_title ?? '—' }}</td>
+          <td class="num">{{ durationText(s.duration_s) }}</td>
+          <td class="num" [title]="'first seen ' + timeAgo(s.first_seen_at)">{{ s.seen_count }}×</td>
+        </tr>
+      }
+    </tbody>
+  </table>
+
+  @if (total() > page) {
+    <div class="pager">
+      <button class="ghost" [disabled]="api.offset() === 0" (click)="prev()">← prev</button>
+      <button class="ghost" [disabled]="to() >= total()" (click)="next()">next →</button>
+    </div>
+  }
+}

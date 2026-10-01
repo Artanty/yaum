@@ -531,3 +531,482 @@ when the first pass is below threshold — more search calls, more wall-clock. F
 rather than silently spending proxy time. Same for "Join Me in Death" (0.80): She Wants Revenge are
 genuinely absent from YouTube Music, only covers exist — that one is a real-world data limit.
 RULE 5: still no commit; nothing staged.
+
+---
+
+<!-- moved out of DECISIONS.md on 2026-10-01 to stay under the ~250-line limit (AGENTS.md rule 4) -->
+
+## 2026-09-30 — PLAN (rule 1): show the mush result inside the extension
+User: "i want to see result of work in ext". Today the extension is a dead end — it scrapes tracks and
+copies JSON for the CLI, and nothing ever contacts mush, so none of the matching work is visible in it.
+Now that POST /migrate accepts mode=json, the extension can be the actual front end for the whole thing.
+
+DECISION: additive, not a rewrite. Copy JSON stays (it is the CLI path and is already tested); a
+"Convert with mush" flow is added beside it.
+1) web/manifest.json
+   - host_permissions for loopback: the documented local server case, statically declared.
+   - optional_host_permissions ["https://*/*"]: a deployed (Render) host is granted ON DEMAND via
+     chrome.permissions.request() when the user types one. Deliberately not a blanket static grant —
+     an unpacked admin tool should not ship permanent network reach it does not need.
+   - MV3 lets an extension page fetch a host_permissions origin with NO CORS headers, so the server
+     needs no @fastify/cors change. POST as application/x-www-form-urlencoded (CORS-safelisted, and it
+     is what @fastify/formbody already parses) so there is not even a preflight.
+   - name/description: it converts now, it does not merely list.
+2) web/popup.html — server URL input (localStorage, default http://127.0.0.1:8000), "Convert with
+   mush" button, results pane (summary counts + one row per track with a YouTube Music link, score,
+   status) and "Copy links". Reuse the CLI's review rule (0 < score < 0.9995 -> mark) so the extension
+   cannot show a confident-looking wrong link, the same invariant job.ejs and the CLI now share.
+3) web/popup.js — postForm(); POST /migrate with redirect:'follow' and take the id from
+   response.url, because the 303 Location header is NOT readable cross-origin (not in the CORS
+   exposed list) while response.url IS. Poll /job/<id>?format=json every 2s to done/failed, render
+   processed/total, then the table. Copy links = watch?v= for every item that has a video_id.
+   If the typed host is not covered by a granted permission, ask for it first and say so on failure.
+4) VERIFY: node --check; existing playwright test stays green; and prove the exact request sequence the
+   extension performs (POST -> follow redirect -> poll -> render) against a live server from Node, so
+   the contract is verified even though this box cannot run a real Chrome extension.
+
+## 2026-09-30 — RESULT: the extension is now a real mush client
+Shipped. The popup no longer dead-ends at "copy JSON": Scan -> "Convert with mush" -> the matching
+result is rendered IN the extension (summary counts, one row per track with a clickable YouTube Music
+link, score + status), plus "Copy YouTube Music links" and a link to the full server report.
+- manifest 0.1.0 -> 0.2.0, renamed "YaMusic Share → YouTube Music"; it converts now, it does not
+  merely list. host_permissions = loopback only; an https host is requested on demand, so an unpacked
+  admin tool does not permanently ship network reach it does not need.
+- Server URL is a saved setting (localStorage), default http://127.0.0.1:8000, which matches
+  server.ts:160 (PORT ?? 8000).
+- Kept Copy JSON / Stop / step log / side panel — they are the CLI path and already tested. The convert
+  button stays disabled until a scan yields tracks, so it cannot post an empty list.
+
+The extension reuses the review invariant rather than inventing its own: score 0<s<0.9995 is rendered
+"⚠ review", identical to cli.ts and job.ejs. A confident-looking wrong link is the one failure mode
+that silently ships to the user, so all three surfaces now agree on when to distrust a match.
+
+VERIFIED the exact request sequence popup.js performs, against a live server (Node replay, since this
+box cannot load a real unpacked extension):
+  POST /migrate (form-encoded, redirect:follow) -> 200, id taken from response.url -> cf74fc31f8d9
+  -> poll /job/<id>?format=json -> done 16/16 -> summary {"matched":15,"uncertain":1,"links":16}
+  -> 16 clipboard links, first https://music.youtube.com/watch?v=f6z2dS5KHgc
+  -> 2 rows flagged ⚠ ("I Don't Feel Like Dancin'" 0.70, "Join Me in Death" 0.80)
+Also: node --check popup.js content.js clean; playwright 1/1 still green.
+Note the id MUST come from response.url, not the 303 Location header: Location is not in the CORS
+exposed-headers list, so a cross-origin extension page cannot read it. That is now recorded in code.
+
+Side benefit observed: this run finished in seconds, because "cache only matched" meant 15 cache hits
+and just the one uncertain track was re-searched — exactly the intended behaviour from the previous
+entry, and further reason the extension is the right front end (re-runs are cheap).
+NOT verified here: real Chrome host_permissions/CORS behaviour and chrome.permissions.request — those
+need a human to load the unpacked extension. The server contract they depend on IS verified above.
+RULE 5: no commit, nothing staged.
+
+## 2026-09-30 — FIXED: server would not start (Node 18 vs undici@7)
+Symptom, on `npm run start` from back/: undici/lib/web/webidl/index.js threw
+`ReferenceError: File is not defined` and the process died before listening.
+Cause: `File` only became a Node GLOBAL in Node 20; undici@7 reads it at import time. The repo
+already said `engines:>=20` and back/.nvmrc already said `20`, but npm only WARNs on an engine
+mismatch — it does not stop — so the app ran on Node 18 and died with a stack trace that blames a
+dependency instead of the real cause. The shell here defaulted to v18.20.8.
+Three node installs were competing on PATH: nvm v18.20.8, nvm v20.19.5, and /usr/local/bin/node
+v22.14.0 (the last one wins in a LOGIN shell; nvm wins in an interactive one).
+FIX (user chose): `nvm alias default 20.19.5`.
+VERIFIED with `env -i` (clean env, no inherited PATH):
+  clean interactive -> /Users/.../nvm/versions/node/v20.19.5/bin/node, v20.19.5
+  clean login       -> /usr/local/bin/node, v22.14.0 (also satisfies >=20)
+  `npm run start` on that clean shell -> /healthz 200, / 200, no errors in the log.
+So both shell kinds now clear >=20; Node 18 is unreachable from a new terminal.
+TWO GOTCHAS recorded so nobody re-derives them:
+- `nvm use` printed "Now using node v20.19.5" while leaving v18 first in PATH (three duplicate v18
+  entries). A success message from `nvm use` is NOT proof — always check `node -v`.
+- The duplicate-v18 PATH here is an artifact of the agent harness, not the user's terminal. Only
+  `env -i ... zsh -i -c` reflects a real new terminal. Do not "fix" .zshrc based on the inherited PATH.
+STILL TRUE from earlier entries: Yandex API is 403-walled from this host, and YouTube needs
+YTM_PROXY=http://127.0.0.1:8080 (local only; Render has no such route).
+NOT done, deliberately: the repo still only warns on old Node. A preflight check in `npm start`
+that prints one clear line ("needs Node >=20, found v18") was offered and DECLINED in favour of the
+nvm default — so a machine with Node 18 and no nvm still gets the cryptic undici trace.
+RULE 5: no commit, nothing staged.
+
+## 2026-10-01 — PLAN (rule 1): a real music-library web app (Angular 21 + MySQL), extension becomes a capture device
+
+**Goal**
+- Move existing extension from `web/` to `web/ext/` and create an Angular music-library web app under `web/app/`.
+- Add MySQL-backed scan imports, a global song library, playlists, sharing/permissions, imports queue, and notifications.
+
+**Constraints**
+- **Existing remote MySQL** via `back/.env`; do NOT add SQLite or a second database engine. Reuse the connection in `back/src/db.ts` style (mysql2/promise). Read env as-is: `DB_HOST, DB_PORT (3306), DB_DATABASE, DB_USERNAME, DB_PASSWORD`.
+- **Extend the existing Fastify backend** in `back/` (no new service). Keep it small, keep existing API intact.
+- **Angular 21**. Node `20.19.5` (per `.nvmrc` in root). TypeScript strict. Use Signals + `httpResource` (no NgRx).
+- **No real auth**. Seed two users: `artyom` and `friend`. Identify user via header `x-user-id` (or extension can send `userId` in body for scans). Temporary identity only.
+- **Genres**: add schema and filter (global). No external genre provider for now. Use a `NULL_GENRE_PROVIDER` marker so code is ready to swap later.
+- **YouTube matching** stays optional/off during import. Songs can have `yt_video_id`, `match_score`, `matched_at` (nullable).
+- **Extension** must remain working (existing tests). Add "Import to my library", a user ID setting, and POST scan JSON to `/api/library/scan`.
+- **Permission semantics**: only owners can delete/share playlists; owners or `can_edit` collaborators can edit. Deleting a playlist must not delete songs.
+
+**Data model (songs global, imports per-user)**
+- `users(id, username, display_name)`
+- `artists(id, name, normalized_name)` — unique normalized
+- `albums(id, title, normalized_title)` — or keep simple; may not be strictly necessary but convenient
+- `songs(id, dedup_key, title, normalized_title, duration_s, album_id, yt_video_id, match_score, matched_at, first_seen_at, last_seen_at, seen_count, play_count)` — **global fact, no user_id**. Dedup key: e.g. `sha1(normalize(title)+'|'+normalize(sortedArtists)+'|'+r(duration_s))`. duration rounded to integer (or 1s tol)
+- `artist_songs(id, artist_id, song_id, role)` — multi-artist/feat support
+- `genres(id, name, slug, normalized_name)` unique
+- `song_genres(id, song_id, genre_id)` M:N
+- `playlists(id, owner_id, name, description, created_at, updated_at)` — owner only for delete/share
+- `imports(id, user_id, source, source_label, page_url, track_count, new_song_count, raw_count, skipped_count, is_processed, playlist_id, created_at, processed_at)` — queue per user
+- `import_items(id, import_id, idx, song_id, title_raw, artists_raw, album_raw, duration_s_raw, is_new)` — for review history
+- `playlist_items(id, playlist_id, song_id, position, added_by, added_at)`
+- `playlist_collaborators(id, playlist_id, user_id, can_edit, shared_at)` — sharing + permissions
+- `notifications(id, user_id, type, actor_id, playlist_id, import_id, payload, is_read, created_at)` — playlist_shared, playlist_edited, import_ready
+
+**Dedup rules**
+- Consider a track the same song if (normalized_title, sorted normalized_artists, rounded duration_s within 1s). Cross-user dedup must reuse global `songs.id`.
+- On scan: write import in a transaction; create missing artists/albums/songs (idempotent), increment `seen_count`, set `last_seen_at`, and record import_items.
+
+**API (new, under `/api/library`)**
+- `GET /healthz` — provider marker
+- `GET /users` — list (for switcher)
+- `GET /me` — current user badges (pendingImports, unreadNotifications, myPlaylists, sharedWithMe, librarySongs)
+- `POST /scan` — body `{userId?, pageUrl?, label?, tracks:[{title,artists:string[],album?,durationS?}...]}`. Accepts either header `x-user-id` or body.userId. Returns `{importId, trackCount, newCount, dupCount, skippedCount, pendingImports}`
+- `GET /imports/pending` — list pending imports for user
+- `GET /imports/:id` — detail (tracks + isNew)
+- `POST /imports/:id/playlist` — create playlist from processed/import items (or from new songs) → `{playlistId, trackCount}`
+- `GET /songs?q=&genreId=&artistId=&albumId=&limit=&offset=` — global library, paged
+- `GET /genres`, `/artists`, `/albums` — filters
+- `POST /playlists` — create empty
+- `GET /playlists` — mine + shared with me
+- `GET /playlists/:id` — detail with items (joined with songs, artists)
+- `PATCH /playlists/:id` — rename/description (edit permission)
+- `DELETE /playlists/:id` — owner only; does not delete songs
+- `POST /playlists/:id/items` — add songs (array) (edit permission) → notify collaborators if any
+- `DELETE /playlists/:id/items/:itemId` — remove (edit permission)
+- `POST /playlists/:id/share` — owner shares with userId, canEdit bool → notification to recipient
+- `DELETE /playlists/:id/share/:userId` — owner unshares
+- `PATCH /playlists/:id/share/:userId` — toggle canEdit
+- `GET /notifications` — unread first, paged
+- `POST /notifications/mark-read` — mark all read for user
+- `POST /notifications/:id/read` — mark one
+
+**Extension changes (`web/ext/`)**
+- Add server URL (already exists) and **user ID** setting (persisted). Default `1` (artyom). Posts JSON body to `${base}/api/library/scan` with `Content-Type: application/json`, includes `userId`, `pageUrl`, `label`, `tracks`.
+- Keep "Scan", "Copy JSON", "Convert with mush" as-is. Add "Import to my library" (disabled until scan ready). Show result: import id + new/dup/skipped. Existing Playwright test must still pass.
+
+**Angular app (`web/app/`)**
+- Pages: Library (search + filters + table), Imports (pending list + detail → "Create playlist"), Playlists (mine/shared), Playlist Detail (rename, reorder not required, add/remove tracks, share/unshare, toggle edit, delete), Notifications. Shell with user switcher, badges (pending imports, unread alerts), counts.
+- Services: `LibraryApi` (httpResource + mutations), `Session` (userId + users list, persisted). Interceptor adds `x-user-id`. Proxy to backend in dev.
+- Models typed to API shapes. No inline SQL in frontend.
+
+**Testing & verification**
+- Backend unit tests: dedup, importScan (new vs dup, skipped), playlist sharing permissions, playlist deletion preserves songs, notifications. Existing 28 tests must stay green, add library tests.
+- Backend HTTP E2E: POST /scan → pending import → create playlist → share → collaborator sees/edit → notifications. Against remote MySQL (no local DB spin-up required). Leave no test data behind.
+- Extension: existing Playwright test still passes; add a trivial check if desired but not required.
+- Angular: build succeeds, no TypeScript errors. Optional: basic component tests only if trivial.
+
+**Migration/placement**
+- Move: `web/content.js`→`web/ext/content.js`, `web/manifest.json`→`web/ext/manifest.json`, `web/popup.html`→`web/ext/popup.html`, `web/popup.js`→`web/ext/popup.js`, `web/test/*`→`web/ext/test/*`. Preserve git history if possible (use `git mv`).
+- Create Angular workspace `web/app/` with SCSS, routing, Vitest or Karma? Angular 21 default unit test: use Vitest via `@analogjs/vitest-angular` or Angular's built-in; keep it simple.
+
+**Implementation order**
+1. Write PLAN to `DECISIONS.md` (rule 1).
+2. Git-move extension to `web/ext/`, scaffold Angular `web/app/`.
+3. Back: schema + store + routes + CORS + seed users `artyom` (id 1) and `friend` (id 2).
+4. Back tests + E2E against remote DB.
+5. Angular: models, API, session, shell, pages.
+6. Extension: import UI + POST.
+7. Verify end-to-end (scan→import→playlist→share→notifications), run all tests/lint/build.
+8. Write RESULT to `DECISIONS.md` (rule 2). Never commit.
+
+**Acceptance**
+- All existing tests pass. New backend tests pass. Extension Playwright still green. Angular builds. Live smoke against real remote MySQL succeeds. No data left behind.
+
+## 2026-10-01 — RESULT (rule 2): library app shipped, backend live, extension import works
+
+**User-visible changes**
+- `web/ext/` — popup now has "Import into my library" (uses `POST /api/library/scan`), user ID dropdown, new version `0.3.0`. Playwright test still passes.
+- `web/app/` — Angular 21 app: library (searchable, genre/artist/album filters), imports queue, playlists (create/share), playlist detail (rename, add/remove tracks, sharing), notifications, shell with user switcher and live badge counts. Built successfully; core helpers unit-tested (17/17 passing).
+- `back/` — added library feature: schema (13 tables), store with scan import + dedup (normalized title+sorted artists+duration), playlist sharing/edit permissions, notifications, transactional logic. Tests: 44 unit + 20 e2e checks against the remote MySQL, all passing. `GET /api/library/healthz`, `/api/library/users`, `/api/library/me` verified against the running server.
+
+**Technical choices**
+- Extend the existing Fastify server (no new process), MySQL via `mysql2` with transaction-per-write for scans, cross-user song dedup by a SHA1 dedup key, playlist deletion does not remove songs, permission model matches spec (owner or `can_edit` may edit; only owner may delete/share). CORS is configured.
+- Angular 21 with signals and `httpResource` (no NgRx); interceptor injects `x-user-id` header, proxy adjusted to read `YAUM_API` during dev. `playlist-detail` uses `input.required<number>()` with `withComponentInputBinding()`. Converted to lazy-loaded routes.
+
+**Live verification (smoke)**
+- Scanned 4 Yandex-like rows for user 1: returned `importId 1, trackCount 3, newCount 3, dupCount 0, skippedCount 1` (duplicate Roxanne correctly dropped).
+- Preflight OPTIONS for `/api/library/scan` returns `204` with `Access-Control-Allow-*` (localhost origin allowed).
+- Created playlist "Police (live smoke)" from import, shared with user 2 (`can_edit: true`) → unread notification appears for user 2 (`playlist_shared`). UI shows badges (`Playlists 1`, `Alerts 1`) and the shared playlist is editable for the collaborator. Rename, add/remove tracks all worked without console errors in a Playwright-driven UI check.
+- Cross-user dedup confirmed: rescanning as user 2 added 0 new global songs, user 2 gets their own pending import.
+
+**Bugs the verification caught (all fixed)**
+- `durationText(59.6)` printed `0:60` — it rounded the remainder instead of the total.
+- `artistCredit` printed every artist twice ("A, B feat. A, B") when none had role `main`.
+- `GET /users` returns `{users:[...]}`, but the app typed the resource as `User[]`, so the user switcher was always empty.
+- Playlist detail had no `owner_username`, so the header read "by · 3 tracks"; added to the detail payload.
+- Dev proxy was hardcoded to port 8000; now `proxy.conf.js` reads `YAUM_API`.
+
+**Cleanup**
+- The smoke-run rows (playlist 1, import 1, tracks 1–3, album 1, artist 1, notifications) were removed from the remote database after verification. `.gitignore` updated to ignore extension test results.
+
+**Commands (for next runs)**
+- Back: `cd back && npm run lint && npx vitest run && npx tsx test/e2e-library.ts`
+- App: `cd web && npm run build && npm test`
+- Ext: `cd ext && npx playwright test`
+- Dev servers: backend `cd back && npx tsx src/server.ts` (port 8000); app `cd web && npx ng serve --port 4200` (proxy to 8000 unless `YAUM_API` set)
+
+## 2026-10-01 — PLAN (rule 1): flat layout — `web/` (app) and `ext/` (extension) at the repo root
+
+User: "no. make /web and /ext. move files". The `web/app` + `web/ext` nesting bought nothing: the
+extension was never part of the web app, and `web/` holding two unrelated Node projects only made
+every path longer and every command ambiguous ("cd web, then what?").
+
+DECISION: `web/ext/*` → `ext/*` (git mv, history already follows the earlier move), and
+     `web/app/*` → `web/*` so the Angular app owns `web/` outright. `web/app` disappears.
+
+1. `git mv web/ext ext` (keeps the R (rename) status from the original `web/` move).
+2. Plain `mv` of the Angular app up one level; it is untracked, so no history to preserve.
+3. Delete `web/app/dist` and `web/app/.angular/cache` first — both embed absolute paths that would
+   silently point at a directory that no longer exists.
+4. `.gitignore`: `web/ext/test-results/` etc. → `ext/…`; the app's own `.gitignore` moves with it
+   and already covers `/dist` and `/.angular/cache`.
+5. Check every path reference: `.gitignore`, `web/proxy.conf.js` (its `../back` stays correct —
+   `web/` and `back/` are now siblings), AGENTS.md files, DECISIONS.md.
+6. Re-verify from the new paths: app build + 17 tests, ext Playwright, back lint/tests untouched.
+7. Record the new layout in the RESULT entry. No commit.
+
+## 2026-10-01 — RESULT (rule 2): flat layout done, plus an NG0100 fix the move surfaced
+
+**Layout now** (three top-level projects, each with its own package.json):
+- `back/` — Fastify + MySQL. `cd back && npm start` → :8000
+- `web/` — Angular 21 app. `cd web && npm start` → :4200, proxies `/api` to :8000
+- `ext/` — MV3 extension. `cd ext && npx playwright test`
+
+`git mv web/ext ext` kept the rename status, so the extension's history still reads
+`web/popup.js → ext/popup.js` (two moves, one file). The Angular app was untracked, so it was a
+plain move. `web/app/dist` and `web/app/.angular/cache` were deleted before the move — both embed
+absolute paths, and a stale cache pointing at a directory that no longer exists is a confusing
+failure. `.gitignore` moved the Playwright entries to `ext/…`; the app's own `.gitignore` travelled
+with it and already covers `/dist` and `/.angular/cache`. `web/proxy.conf.js` needed no change —
+`../back` is still right now that `web/` and `back/` are siblings.
+
+**Re-verified from the new paths**
+- `cd web`: `ng build` clean, 17/17 unit tests pass.
+- `cd ext`: Playwright 1/1 passes, `popup.js` + `content.js` parse.
+- `cd back`: `tsc --noEmit` clean, 44/44 tests pass.
+- Live, through the dev proxy: `GET /api/library/users` 200, `/me` correct for both users.
+
+**One real bug found while re-verifying, and fixed**
+The Playwright UI sweep hit a 404 playlist (`/playlists/1`, deleted by the earlier smoke cleanup) and
+logged `NG0100: ExpressionChangedAfterItHasBeenCheckedError` in `_PlaylistDetailPage`. It was not
+caused by the move, and it was not flaky: watching the DOM every 200ms showed the shell's 15s poll
+at +15.0s render `loading…` and at +15.2s the error again — a branch flip inside one
+change-detection pass. Cause: `httpResource` clears `error` the instant a refetch starts, so on a
+playlist that 404s the template cycled error → loading → error. My first fix (a template
+`isLoading() && !error()` guard) did not work, because `error` is already gone by then; measurement
+showed it flipped to the *empty* branch instead. The fix latches the error in the component
+(`latchedError`, set from an effect) and checks `playlist()` FIRST in the template, so a later
+success still wins. NG0100 count on that page across a poll: 1 → 0, and the flicker is gone. The
+remaining console output there is just the expected 404 plus Angular's own error-state log.
+
+**Cleanup**
+Probe rows (playlist 2, import 2, 2 songs, 2 artists) were deleted from the remote database; only
+the two seeded users remain. No temp scripts left in the tree. Nothing committed.
+
+---
+
+## 2026-10-01 — "scanned 2 songs but they are not in the database": the import was never broken
+
+**Symptom.** The user scanned two tracks and expected them in the database. `/api/library/me`
+showed `librarySongs: 0`, so they asked whether the extension could reach the backend at all.
+
+**The backend and the extension were both fine — verified, not assumed.**
+Loaded the real unpacked extension in Chromium and checked, from the extension's own page:
+`chrome.permissions.contains({origins:["http://127.0.0.1:8000/*"]})` → `true`; a cross-origin
+`GET /api/library/users` → `200` with live rows. First attempt to prove the JSON preflight
+reported a FAIL: `OPTIONS /api/library/scan` → `400`. That FAIL was **my test's fault, not the
+server's**. `fetch()` silently drops `Origin` and `Access-Control-Request-*` (forbidden header
+names), so my hand-rolled "preflight" reached the server as a bare `OPTIONS` with no `Origin` —
+which the server rightly rejects with 400. `curl` proves the server answers a real preflight with
+`204` and the right headers for both `http://localhost:4200` and the extension origin. The test
+was rewritten to trigger a genuine preflight the only way a browser can: a POST with
+`Content-Type: application/json` aimed at a path that does not exist, so the preflight is the only
+thing that can succeed and no row is written. All three checks pass. No CORS change was needed.
+
+**The real cause was my own copy.** Scan is local-only by design, and the import is a separate
+button — but the status line after a successful scan said only *"Now press 'Convert with mush'"*
+and never mentioned the import at all, while the popup's own header said *"Then convert to YouTube
+Music links"*. Nothing told the user that pressing **2 · Import into my library** is the step that
+writes to the database. Fixed: `grow()` now reports `read from the page — not saved yet` and names
+both next steps; the Scan button no longer overwrites that message with a vaguer one; the header
+and a line under the status box state that nothing is saved until import.
+
+**A second real bug, found on the way: `content.js` scanned pages with no scroller as empty.**
+`walk()` did `if (!scroller) return [...ACC.values()]` — an early return that skipped `absorb()`
+entirely, so a page full of rendered rows but without a recognised virtualised scroller reported
+zero tracks. It now absorbs first. Regression test added.
+
+**Coverage gap closed: the shipped `content.js` was never tested.** `ext/test/content.test.js`
+loads `fixture.html`, which carries its **own copy** of the walk logic — so the suite exercised
+that copy, not the file the extension actually ships. Added `ext/test/content-script.test.js`,
+which injects the real `content.js` behind a small `chrome.*` stub and drives it with the same
+`SCAN` message the popup sends: 40/40 tracks from the virtualised fixture (dedup, parsed shape,
+`durationS`), the no-scroller regression, and an empty page returning zero instead of throwing. The
+fixture now re-virtualises on `scroll`, like the real page, so a scrolling walker sees fresh rows.
+`npx playwright test` in `ext`: **4/4 pass.**
+
+**Browser-level scan→import e2e: attempted and abandoned, on purpose.** It would be the strongest
+proof, but Chromium skips content-script injection for Playwright-fulfilled routes, and
+`--host-resolver-rules` is ignored by this build, so a genuine `music.yandex.ru` page load was only
+reachable by hitting the live site. That probe did reach it and the real site answered with a
+**WAF block for this IP** ("too many requests from your IP", HTTP 403). No further requests were
+made and the half-built e2e was deleted rather than left as a failing test. **Heads-up: the real
+music.yandex.ru may be temporarily blocking this machine's IP**, which will affect live extension
+testing until it lifts. The import button's own request path is covered by the passing preflight
+and GET checks plus the backend's own 44 unit + 20 E2E tests; clicking it on a real page remains
+the one step verified by hand only.
+
+**Also noted, not changed:** `popup.html` has no `<title>` (cosmetic), and the DB is still clean
+(`librarySongs: 0`) — the user's two scanned tracks exist only in popup memory, so they just need
+to press **2 · Import into my library** on the tab they already scanned.
+
+---
+
+---
+
+<!-- moved out of DECISIONS.md on 2026-10-01 (AGENTS.md rule 4) -->
+
+threads now lives there.)*
+
+## 2026-10-01 — logging in `ext` and `back`, so the next bug report starts with logs
+
+**Why this exists.** The "scanned 2 songs, nothing in the database" round could have been settled in
+seconds if the extension had left a trace. Instead the only evidence was the database's empty state,
+and the backend's log had nothing about scans at all. Guessing produced a *false* CORS theory that
+had to be walked back. Standing rule from the user, now also written into `AGENTS.md`: **when the
+user reports a bug, read the logs first** (`back/logs/*.log` and the extension's log) before
+forming any theory.
+
+**What `back` already had, and what was actually missing.** `back/src/lib/logger.ts` is good: JSON
+lines, `app.log` + `error.log`, rotation, `sanitize()` for secrets, and a `getLogs()` reader. It was
+already logging every request via the `preHandler` hook in `server.ts` and the scan import in
+`store.ts`. The real gaps were (a) the noisy `/me` + `/notifications` poll from the Angular shell
+drowns everything else — 393 KB of mostly `GET /api/library/users`, (b) no `console` output at
+all, so a dev-box run looked completely silent, (c) no read endpoint for the library half, and
+(d) the *outcome* of a scan (which tracks, how many new/dup, which user) was not logged with
+enough detail to answer "why is it empty".
+
+**Planned changes**
+
+`back`:
+1. Poll suppression by default: `LOG_SKIP_POLL` (default on) drops the high-frequency read-only
+   library GETs (`/me`, `/notifications`, `/users`, `/songs`, `/playlists`, `/healthz`) so the log
+   is signal. Every dropped line is counted and the count is logged once at startup, so silence is
+   never mistaken for "nothing happened". `LOG_SKIP_POLL=off` restores the old behaviour.
+2. Mirror every entry to the console as well as the file, so `npm start` shows what happened.
+   `LOG_CONSOLE=off` silences it; the file is always written.
+3. Log the scan *outcome* explicitly — tracks in, new/dup/skipped, import id, user, label, page url
+   — and log rejected scans (400s) with the reason. A 4xx is the single most useful line when the
+   user says "it did nothing".
+4. `GET /api/library/logs?last=N&level=...` so the log is readable over HTTP without shell access,
+   reusing `logger.getLogs()`.
+
+`ext` (currently logs *nothing* — this is the actual gap):
+5. New `ext/log.js`: a ring buffer (last 300 entries) persisted in `chrome.storage.local`, so the
+   trace survives the popup closing, plus a console mirror. Degrades to memory-only if storage is
+   unavailable. Timestamped, level-tagged, and safe to call from any context.
+6. Instrument the three places a scan can fail, which is exactly what was invisible before:
+   `content.js` (message received, scroller found or not, rows seen per step, final count),
+   `popup.js` (permission grant result, request URL/status/duration, response body on failure),
+   and the import handler (payload size, import id, counts).
+7. `ext/logs.html` — a page that renders the buffer with copy-to-clipboard and a clear button, plus
+   a "copy logs" button in the popup. The user must be able to hand over a real trace.
+8. Test the logger, and assert the import path writes a trace entry.
+
+**Non-goals:** no analytics, no remote log shipping, no PII beyond what the existing
+`x-user-id` already carries. Nothing logged from the page's DOM text (only counts and titles the
+user already sees in the popup).
+
+### Result — done, and two of my own bugs surfaced on the way
+
+**`back`.** `logger.ts` gained a console mirror (one compact line per entry: time, level, fn, msg,
+data) plus a 500-entry in-memory ring with `getLogs({memory: true})`; the ring and the console are
+independent of file writing, so `LOG_DISABLED=true` no longer means blind. `server.ts` suppresses
+the high-frequency library polls (`/me`, `/notifications`, `/users`, `/songs`, `/playlists`,
+`/imports/pending`, `/healthz`) and logs `-> <status> <method> <url> in <ms>ms` for everything else,
+so a request arriving is no longer indistinguishable from a request succeeding. Scan logging names
+the outcome and the rejection reason (`scan rejected … all missing a title`). Playlist create /
+update / delete, item add / remove, share / unshare and edit-denied all log too, where the whole
+feature had previously been silent. `GET /api/library/logs?last&type&source` reads it over HTTP.
+
+Verified live on port 8231: a rejected scan, an accepted scan (importId, tracksIn/new/dup/skipped,
+label), and a 404 all appear with timings, while **10 poll requests produced zero lines** — the
+noise that used to bury everything.
+
+**Bug found in my own plan, before shipping it:** the skip counters were reported from
+`app.addHook('onClose')`, which **does not fire on SIGINT/SIGTERM** — a plain Ctrl-C never reaches
+it, so the one number that makes silence explicable would have been exactly the number never seen.
+Now reported from a real signal handler in the startup block (with a 3s force-exit guard), from a
+5-minute `unref`'d timer, and live via `requestLogging` in the logs response. Confirmed: SIGTERM
+prints `poll requests suppressed so far {"skippedPolls":4,…,"why":"shutdown (SIGTERM)"}` and the
+process exits cleanly. Signal handlers live in the startup block, not `buildApp`, so importing the
+app in tests cannot leak listeners; the decorators are declared via `declare module 'fastify'`.
+
+**`ext`.** New `ext/log.js`: 300-entry ring persisted in `chrome.storage.local` + console mirror,
+degrading to memory-only when storage is unavailable, never throwing. `content.js` logs what a scan
+saw (URL, scroller found or not, row count, per-pass step counts) and warns explicitly on zero
+tracks; `popup.js` routes **every** fetch through one `call()` that logs URL, status, duration and
+the response body on failure, logs permission-prompt results, and logs a boot line recording the
+resolved server and user — the usual cause of "I clicked import and nothing happened". Popup gets a
+`diagnostics log` panel with copy/open/clear; `ext/logs.html` + `logs.js` render the same buffer
+filterable by level and text.
+
+**Two real bugs caught by verifying against the actual extension, not the stubs:**
+
+1. **`logs.html`'s inline `<script>` was dead code.** The MV3 default CSP is `script-src 'self'`
+   and refuses inline scripts outright, so the viewer rendered an empty table and logged nothing
+   about it. Moved to `logs.js`.
+2. **The log was never actually persistent.** `chrome.storage.*` is gated behind the `"storage"`
+   manifest permission, which I had not added — so the API was simply *absent* and `log.js` had
+   been silently falling back to memory-only, i.e. **nothing survived the popup closing**, the one
+   thing it was built for. My unit tests could not catch this because they inject their own
+   `chrome.storage` stub; only loading the real extension exposed it. Fixed by adding `"storage"`,
+   and guarded by a manifest assertion plus script-order assertions so it cannot regress silently.
+   Re-verified: the entry is in `chrome.storage.local`, the viewer updates live, and a *new* popup
+   restores the previous trace.
+
+Also fixed while in there: a third `</html>` in `popup.html`, and a `localStorage` read in
+`log.js` that **threw** on opaque origins (caught by its own test — logging must never be the
+thing that breaks the page).
+
+**Tests.** `back`: 50/50 (44 + 6 new in `test/library-logs.test.ts`), `tsc` clean. `ext`: 19/19
+(9 logger + 5 content-script + 1 pre-existing + 4 manifest/CSP guards). `web`: 17/17, untouched.
+DB left clean: only the 2 seeded users. The standing rule is written into `AGENTS.md` under
+"Bug reports: read the logs FIRST", with the exact commands for both halves.
+
+#### `npm run logs` — and a third bug the tailer exposed immediately
+
+Added `back/scripts/logs.mjs` (zero dependencies, like the logger itself) wired as `npm run logs`:
+`--last N`, `--errors`, `--no-follow`, `--raw`, `--dir PATH`. It prints the same compact line shape
+the logger mirrors to the console, so `npm run logs` and a terminal running the server look alike.
+It polls at 250ms rather than using `fs.watch`, so it survives rotation and truncation without a
+re-attach dance, and it only ever prints **complete** lines (a half-written append is left for the
+next tick instead of being printed as a broken entry). With no log files yet it says so and names
+the directory, and `--errors` with no `error.log` says "created on the first error" rather than
+implying logs are missing.
+
+**Bug found the moment I used it:** the SIGTERM poll-suppression report was printing to the console
+but **never reaching `app.log`**. I had verified that report earlier "on SIGTERM" — against the
+terminal only, which is the wrong half of the claim; `AGENTS.md` tells whoever is debugging to read
+the *file*. Cause: `logger.log()` queues an async append, and the shutdown handler called
+`process.exit()` before that append landed, so on **every Ctrl-C** the one line that makes silence
+explicable was the line missing from the log. `reportSkipCounters` is now async and awaits
+`logger.flush()`, and the signal handler flushes before `close()`/exit (the 3s force-exit guard stays).
+
+Re-verified the real case rather than the unit test: 6 real poll requests → SIGTERM → the counter
+report is in `app.log` and the process still exits cleanly. Two regression tests in
+`test/library-logs.test.ts` (52 total now): one pins `flush()` ⇒ readable on disk and via the
+getter, one pins that `reportSkipCounters` awaits the flush. I checked the second one actually
+fails when the fix is removed, so it is a guard and not a decoration.
+
+Both lessons are now written into `AGENTS.md`: log what you do (with a cause, not just an outcome),
+and flush anything written during shutdown. Also recorded there: `chrome.storage.*` requires the
+`"storage"` manifest permission and the MV3 CSP refuses inline scripts, so a log viewer can be
+completely inert without either — which is exactly how this one was, until I loaded the real
+extension instead of the test stubs.
+
+---

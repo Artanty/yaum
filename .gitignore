@@ -146,8 +146,8 @@ vite.config.ts.timestamp-*
 .vite/
 
 .env
-# Playwright run artifacts (web/ extension tests)
-web/test-results/
-web/playwright-report/
-web/blob-report/
+# Playwright run artifacts (the extension lives in ext/, the app in web/)
+ext/test-results/
+ext/playwright-report/
+ext/blob-report/
 *.tmp
