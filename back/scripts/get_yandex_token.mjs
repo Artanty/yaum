@@ -35,7 +35,7 @@ async function main() {
   const code = await postForm(`${OAUTH_BASE}/device/code`, {
     client_id: CLIENT_ID,
     device_id: randomDeviceId(),
-    device_name: 'mush',
+    device_name: 'plst',
   });
   console.log(`\nOpen ${code.verification_url ?? 'https://oauth.yandex.ru/authorize'} and enter the code: ${code.user_code}\n`);
 

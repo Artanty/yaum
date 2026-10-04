@@ -57,7 +57,7 @@
   const trace = (level, msg, data) => {
     try {
       const send =
-        level === "error" ? yaumLog.error : level === "warn" ? yaumLog.warn : yaumLog.info;
+        level === "error" ? plstLog.error : level === "warn" ? plstLog.warn : plstLog.info;
       send("content", msg, data);
       chrome.runtime
         .sendMessage({ type: "SCAN_LOG", level, msg, data })

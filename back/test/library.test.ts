@@ -172,7 +172,7 @@ describe('library playlists, sharing and notifications', () => {
     const forOne = await store.listNotifications(1);
     expect(forOne.length).toBe(1);
     expect(forOne[0].type).toBe('playlist_edited');
-    expect(forOne[0].actor_username).toBe('friend');
+    expect(forOne[0].actor_username).toBe('zaur');
   });
 
   it('lists a shared playlist for the recipient with can_edit, and not for a stranger', async () => {

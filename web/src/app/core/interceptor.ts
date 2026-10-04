@@ -15,7 +15,7 @@ export function userHeader(req: HttpRequest<unknown>, next: HttpHandlerFn) {
 /** Turns the backend's plain-text 4xx bodies into something worth putting in the UI. */
 export function errorText(err: unknown): string {
   if (err instanceof HttpErrorResponse) {
-    if (err.status === 0) return 'cannot reach the mush server — is `npm start` running in back/?';
+    if (err.status === 0) return 'cannot reach the plst server — is `npm start` running in back/?';
     const body = (err.error as string | undefined) ?? '';
     return body.trim() || `${err.status} ${err.statusText}`;
   }

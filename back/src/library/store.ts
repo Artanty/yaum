@@ -1,6 +1,7 @@
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { logger } from '../lib/logger.js';
 import { albumKey, artistKey, songDedupKey } from './keys.js';
+import type { MatchableSong } from './match.js';
 import type {
   AlbumRow,
   ArtistRow,
@@ -25,8 +26,8 @@ export interface SeedUser {
  * with an x-user-id header.
  */
 export const SEED_USERS: SeedUser[] = [
-  { username: 'artyom', displayName: 'Artiom' },
-  { username: 'friend', displayName: 'Friend' },
+  { username: 'artyom', displayName: 'Artyom' },
+  { username: 'zaur', displayName: 'Zaur' },
 ];
 
 /** The non-row decorations a song needs before it can be displayed. */
@@ -442,6 +443,45 @@ export class LibraryStore {
     return res.insertId;
   }
 
+  /**
+   * Create a playlist and optionally fill it, in ONE transaction. The UI calls this for "make a
+   * playlist from these library songs": doing it as create-then-add over HTTP would leave an empty
+   * playlist behind whenever the second call failed, which is exactly the mess a user would then
+   * have to clean up by hand.
+   */
+  async createPlaylistWithSongs(
+    ownerId: number,
+    name: string,
+    description: string | null,
+    songIds: number[],
+  ): Promise<{ playlistId: number; added: number }> {
+    if (!songIds.length) return { playlistId: await this.createPlaylist(ownerId, name, description), added: 0 };
+
+    const conn = await this.pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const t = now();
+      const [res] = (await conn.query(
+        'INSERT INTO playlists (owner_id, name, description, created_at, updated_at) VALUES (?,?,?,?,?)',
+        [ownerId, name, description, t, t],
+      )) as [ResultSetHeader, unknown];
+      const playlistId = res.insertId;
+
+      const values = songIds.map((songId, i) => [playlistId, songId, i, ownerId, t]);
+      await conn.query('INSERT INTO playlist_items (playlist_id, song_id, position, added_by, added_at) VALUES ?', [
+        values,
+      ]);
+      await conn.commit();
+      return { playlistId, added: values.length };
+    } catch (err) {
+      // Without this the playlist row survives a failed item insert and the user gets an empty one.
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
   async getPlaylist(id: number): Promise<PlaylistRow | null> {
     const [rows] = (await this.pool.query('SELECT * FROM playlists WHERE id=?', [id])) as unknown as [PlaylistRow[], unknown];
     return rows[0] ?? null;
@@ -586,6 +626,50 @@ export class LibraryStore {
       unknown,
     ];
     return new Set(rows.map((r) => r.id));
+  }
+
+  // ------------------------------------------------------ youtube matching
+
+  /**
+   * Song rows in the shape the matcher wants, with artists resolved. The matcher needs the artist
+   * names as a list because a Yandex track can credit several, and a comma-joined string could not
+   * be re-split reliably (see the artist_songs comment in schema.ts).
+   */
+  async matchableSongs(ids: number[]): Promise<MatchableSong[]> {
+    const songs = await this.songsByIds(ids);
+    if (!songs.length) return [];
+    const extras = await this.songExtras(songs);
+    return songs.map((s) => ({
+      id: s.id,
+      title: s.title,
+      artists: (extras.get(s.id)?.artists ?? []).map((a) => a.name),
+      album: extras.get(s.id)?.album_title ?? null,
+      duration: s.duration_s,
+      yt_video_id: s.yt_video_id,
+      match_score: s.match_score,
+    }));
+  }
+
+  /** Persist a match. A null videoId stores the attempt as "tried, found nothing" so a re-match is still possible. */
+  async setSongMatch(songId: number, videoId: string | null, score: number): Promise<void> {
+    await this.pool.query('UPDATE songs SET yt_video_id=?, match_score=?, matched_at=? WHERE id=?', [
+      videoId,
+      score,
+      now(),
+      songId,
+    ]);
+  }
+
+  /** Playlist songs in playlist order, ready to match or export. */
+  async playlistSongsForLinks(playlistId: number): Promise<MatchableSong[]> {
+    const [rows] = (await this.pool.query('SELECT song_id FROM playlist_items WHERE playlist_id=? ORDER BY position, id', [
+      playlistId,
+    ])) as unknown as [{ song_id: number }[], unknown];
+    return this.matchableSongs(rows.map((r) => r.song_id));
+  }
+
+  async songIdsForExport(ids: number[]): Promise<number[]> {
+    return (await this.songsByIds(ids)).map((s) => s.id);
   }
 
   // --------------------------------------------------------- notifications

@@ -40,7 +40,7 @@ describe('userHeader interceptor', () => {
     req.flush({});
   });
 
-  it('leaves non-library requests alone — the mush pages must not get the header', () => {
+  it('leaves non-library requests alone — the plst pages must not get the header', () => {
     http.get('/healthz').subscribe();
     const req = backend.expectOne('/healthz');
     expect(req.request.headers.has('x-user-id')).toBe(false);

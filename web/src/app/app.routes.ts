@@ -5,27 +5,27 @@ export const routes: Routes = [
   {
     path: 'library',
     loadComponent: () => import('./pages/library/library').then((m) => m.LibraryPage),
-    title: 'Library — yaum',
+    title: 'Library — plst',
   },
   {
     path: 'imports',
     loadComponent: () => import('./pages/imports/imports').then((m) => m.ImportsPage),
-    title: 'Imports — yaum',
+    title: 'Imports — plst',
   },
   {
     path: 'playlists',
     loadComponent: () => import('./pages/playlists/playlists').then((m) => m.PlaylistsPage),
-    title: 'Playlists — yaum',
+    title: 'Playlists — plst',
   },
   {
     path: 'playlists/:id',
     loadComponent: () => import('./pages/playlist-detail/playlist-detail').then((m) => m.PlaylistDetailPage),
-    title: 'Playlist — yaum',
+    title: 'Playlist — plst',
   },
   {
     path: 'notifications',
     loadComponent: () => import('./pages/notifications/notifications').then((m) => m.NotificationsPage),
-    title: 'Alerts — yaum',
+    title: 'Alerts — plst',
   },
   { path: '**', redirectTo: 'library' },
 ];

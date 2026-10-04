@@ -2,7 +2,7 @@ import { logger } from '../lib/logger.js';
 
 /**
  * Music-library schema. Separate from db.ts's SCHEMA_STATEMENTS only because it is a different
- * concern (the mush job tables vs. the library), not because it is a different database — it goes
+ * concern (the plst job tables vs. the library), not because it is a different database — it goes
  * through the SAME pool and the SAME auto-create-on-boot path.
  *
  * Ids are plain AUTO_INCREMENT, matching db.ts. NOT `GENERATED ALWAYS AS IDENTITY` even though that

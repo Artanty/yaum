@@ -56,7 +56,7 @@ const load = async (page, { storage = true, throwOnSet = false, localStorageLeve
         };
       }
       try {
-        localStorage.setItem("yaum.logLevel", level);
+        localStorage.setItem("plst.logLevel", level);
       } catch {
         /* ignore */
       }
@@ -78,13 +78,13 @@ test("logs to the console and keeps entries in memory", async ({ page }) => {
     console.log = cap(realLog);
     console.warn = cap(realWarn);
     console.error = cap(realError);
-    yaumLog.info("test", "hello", { n: 1 });
-    yaumLog.warn("test", "careful");
-    yaumLog.error("test", "bad", new Error("x"));
+    plstLog.info("test", "hello", { n: 1 });
+    plstLog.warn("test", "careful");
+    plstLog.error("test", "bad", new Error("x"));
     console.log = realLog;
     console.warn = realWarn;
     console.error = realError;
-    return { got, entries: yaumLog.entries() };
+    return { got, entries: plstLog.entries() };
   });
 
   expect(out.entries).toHaveLength(3);
@@ -100,9 +100,9 @@ test("logs to the console and keeps entries in memory", async ({ page }) => {
 test("survives having no chrome.storage at all", async ({ page }) => {
   await load(page, { storage: false });
   const res = await page.evaluate(async () => {
-    yaumLog.info("test", "no storage here");
-    await yaumLog.flush();
-    return { entries: yaumLog.entries(), text: yaumLog.text() };
+    plstLog.info("test", "no storage here");
+    await plstLog.flush();
+    return { entries: plstLog.entries(), text: plstLog.text() };
   });
   expect(res.entries).toHaveLength(1);
   expect(res.text).toContain("no storage here");
@@ -114,12 +114,12 @@ test("a throwing storage quota does not break logging", async ({ page }) => {
   const res = await page.evaluate(async () => {
     let threw = null;
     try {
-      yaumLog.info("test", "still works");
-      await yaumLog.flush();
+      plstLog.info("test", "still works");
+      await plstLog.flush();
     } catch (e) {
       threw = String(e);
     }
-    return { threw, entries: yaumLog.entries() };
+    return { threw, entries: plstLog.entries() };
   });
   expect(res.threw).toBeNull();
   expect(res.entries).toHaveLength(1);
@@ -127,18 +127,18 @@ test("a throwing storage quota does not break logging", async ({ page }) => {
 
 test("persists to storage and reloads it on the next page", async ({ page }) => {
   await load(page);
-  await page.evaluate(() => yaumLog.info("test", "survives reopen", { k: "v" }));
+  await page.evaluate(() => plstLog.info("test", "survives reopen", { k: "v" }));
 
   // Stand in for the popup closing and reopening: the in-page logger instance is thrown away and
   // a brand new one boots against the same storage. (A real navigation would also work, but the
   // storage stub lives in the document, so a reload would wipe it.)
   const entries = await page.evaluate(async (src) => {
-    await yaumLog.flush();
-    delete window.yaumLog;
+    await plstLog.flush();
+    delete window.plstLog;
     // eslint-disable-next-line no-eval
     (0, eval)(src);
-    await yaumLog.init();
-    return yaumLog.entries();
+    await plstLog.init();
+    return plstLog.entries();
   }, LOG_JS);
   expect(entries).toHaveLength(1);
   expect(entries[0]).toMatchObject({ scope: "test", msg: "survives reopen", data: { k: "v" } });
@@ -147,9 +147,9 @@ test("persists to storage and reloads it on the next page", async ({ page }) => 
 test("caps the ring at 300 entries, dropping the oldest", async ({ page }) => {
   await load(page);
   const res = await page.evaluate(async () => {
-    for (let i = 0; i < 350; i++) yaumLog.info("bulk", `entry ${i}`);
-    await yaumLog.flush();
-    const e = yaumLog.entries();
+    for (let i = 0; i < 350; i++) plstLog.info("bulk", `entry ${i}`);
+    await plstLog.flush();
+    const e = plstLog.entries();
     return { len: e.length, first: e[0].msg, last: e[e.length - 1].msg };
   });
   expect(res.len).toBe(300);
@@ -160,15 +160,15 @@ test("caps the ring at 300 entries, dropping the oldest", async ({ page }) => {
 test("debug is dropped at the default level but kept when asked for", async ({ page }) => {
   await load(page);
   const off = await page.evaluate(() => {
-    yaumLog.debug("t", "chatter");
-    return yaumLog.entries().length;
+    plstLog.debug("t", "chatter");
+    return plstLog.entries().length;
   });
   expect(off).toBe(0);
 
   await load(page, { localStorageLevel: "debug" });
   const on = await page.evaluate(() => {
-    yaumLog.debug("t", "chatter");
-    return yaumLog.entries().length;
+    plstLog.debug("t", "chatter");
+    return plstLog.entries().length;
   });
   expect(on).toBe(1);
 });
@@ -176,8 +176,8 @@ test("debug is dropped at the default level but kept when asked for", async ({ p
 test("an Error is stored with its stack instead of becoming {}", async ({ page }) => {
   await load(page);
   const entry = await page.evaluate(() => {
-    yaumLog.error("popup", "boom", new Error("kaboom"));
-    return yaumLog.entries().at(-1);
+    plstLog.error("popup", "boom", new Error("kaboom"));
+    return plstLog.entries().at(-1);
   });
   // The whole point: the failure survives a storage round-trip with a usable message.
   expect(entry.level).toBe("error");
@@ -189,8 +189,8 @@ test("an Error is stored with its stack instead of becoming {}", async ({ page }
 test("text() renders a copy-pasteable line per entry", async ({ page }) => {
   await load(page);
   const text = await page.evaluate(() => {
-    yaumLog.info("popup", "import accepted", { importId: 7 });
-    return yaumLog.text();
+    plstLog.info("popup", "import accepted", { importId: 7 });
+    return plstLog.text();
   });
   expect(text).toContain("[popup] import accepted");
   expect(text).toContain('{"importId":7}');
@@ -199,10 +199,10 @@ test("text() renders a copy-pasteable line per entry", async ({ page }) => {
 test("clear() empties the buffer and the stored copy", async ({ page }) => {
   await load(page);
   const res = await page.evaluate(async () => {
-    yaumLog.info("t", "one");
-    yaumLog.clear();
-    await yaumLog.flush();
-    return { entries: yaumLog.entries(), stored: window.__mem["yaum.log"] };
+    plstLog.info("t", "one");
+    plstLog.clear();
+    await plstLog.flush();
+    return { entries: plstLog.entries(), stored: window.__mem["plst.log"] };
   });
   expect(res.entries).toEqual([]);
   expect(res.stored).toEqual([]);
@@ -232,14 +232,14 @@ test("logs.html loads its script from a file, not inline", () => {
 });
 
 test("popup.html loads log.js before popup.js", () => {
-  // popup.js calls yaumLog at load time, so the order is load-bearing.
+  // popup.js calls plstLog at load time, so the order is load-bearing.
   const html = fs.readFileSync(path.join(__dirname, "..", "popup.html"), "utf8");
   expect(html.indexOf('src="log.js"')).toBeGreaterThan(-1);
   expect(html.indexOf('src="log.js"')).toBeLessThan(html.indexOf('src="popup.js"'));
 });
 
 test("the content script bundle loads log.js before content.js", () => {
-  // Same reason: content.js traces through yaumLog.
+  // Same reason: content.js traces through plstLog.
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
   const files = manifest.content_scripts[0].js;
   expect(files.indexOf("log.js")).toBeGreaterThan(-1);

@@ -2,133 +2,142 @@
 
 Current thread only. Prior sessions: `DECISIONS-archive.md`.
 
-*(Older entries moved to `DECISIONS-archive.md` to stay under the ~250-line limit per AGENTS.md
-rule 4 — everything up to and including the first logging thread is there; this file holds the
-ext-logs routing work.)*
+*(Older entries moved to `DECISIONS-archive.md` per AGENTS.md rule 4 — this file holds the rename to
+`plst`, the user rename, and the library playlist/export work. The ext-logs routing thread that was
+here before is now in the archive.)*
 
-## 2026-10-01 — PLAN (rule 1): route ext logs to the backend — `POST/GET /api/library/ext-logs`
+## 2026-10-01 — PLAN (rule 1): rename to `plst`, rename the two users, and add library
+### playlist-creation + YouTube Music link export to the web app
 
-The extension log persists 300 entries in `chrome.storage.local`, which fixed "the popup closed and
-the evidence went with it". It is still trapped on the machine that produced it: not greppable, not
-readable over HTTP when the box is remote, and gone with the browser profile. The backend already
-speaks JSON lines and is the thing a bug report is answered from. So: ship the trace there.
+Three requests. Two are mechanical; the third turned out to be mostly absent infrastructure, so the
+findings come first — they are what shape the work.
 
-**Separate file, not the server log.** `logs/ext.log`, written through a second `Logger` instance
-(`filename: 'ext.log'`, and `errorFilename: 'ext.log'` too, so all levels stay in one filterable
-stream). Rotation, sanitizing and reading come free from the existing class. Mixing 200 extension
-lines into `app.log` per batch would bury the server trace, which is the signal.
+#### What the code actually says (checked before planning, not after)
 
-**`POST /api/library/ext-logs`** — `{ extensionId?, userId?, entries: [{ts, level, scope, msg, stack?, data?}] }`
-- cap 200 entries per request, cap `msg` at 500 chars, drop non-objects instead of failing the batch;
-  response carries `{received, stored, dropped, capped}` so truncation is never silent
-- `data` runs through the existing `sanitize`, so a token is masked **on ingest**, not just on read
-- one summary line into `app.log` per request (who shipped how many), so the server log can always
-  tell you whether the extension's logging is arriving at all
-- no auth, consistent with every other library route (`x-user-id` optional)
+1. **Two names are in play, not one.** `mush` (backend: `back/package.json` name, the `<title>` and
+   `<h1>` in `back/views/partials/head.ejs:6,27`, the description in `back/AGENTS.md`) and `yaum`
+   (extension manifest + `ext/package.json`, the five route titles in `web/src/app/app.routes.ts`,
+   the session key `yaum.userId` in `web/src/app/core/session.ts:9`, `YAUM_API` in
+   `web/proxy.conf.js`, the extension log key `yaum.log` in `ext/log.js:15`, and `mush.server` in
+   `ext/popup.js:88,270,364` + `ext/ship.js:37`). Renaming the storage keys is the one risky part:
+   it silently drops the saved backend URL and the logged-in user.
+2. **The user seed has a typo and a stale key.** `SEED_USERS` is
+   `[{username:'artyom', displayName:'Artiom'}, {username:'friend', displayName:'Friend'}]`
+   (`back/src/library/store.ts:27`). `seedUsers` upserts on `username` with
+   `ON DUPLICATE KEY UPDATE display_name=VALUES(display_name)`, so editing the seed alone would
+   **strand** the existing `friend` row instead of renaming it — you would end up with three users.
+3. **Playlist creation from the library needs no backend work at all.** `POST /playlists/:id/items`
+   (`back/src/library/routes.ts:540`) already validates song ids and `store.addPlaylistItems`
+   (`store.ts:544`) already inserts them positionally. The web client already has
+   `createPlaylist()` and `addTracks()` (`web/src/app/core/library-api.ts:120,132`). What is missing
+   is only the UI: `library.html` renders a plain table with no row selection and calls neither
+   method. This is a pure front-end task.
+4. **No library song has ever been matched to YouTube.** `songs` has `yt_video_id`, `match_score`,
+   `matched_at` (`back/src/library/schema.ts:60-62`, mirrored in `types.ts:15-17`) and **nothing
+   writes them** — the only writer of a video id is the old converter (`back/src/db.ts`,
+   `pipeline.ts`) which fills a *different* table for the `/migrate` + `/job/:id` flow. So a link
+   export on its own would render an empty list, every time.
+5. **The matching primitives are reusable.** `matcher.buildQueries()` / `matchTrack()`
+   (`back/src/matcher.ts:73,97`) take a `TrackMeta` of exactly the fields a library song already
+   has (title, artists[], album, duration) and return `MatchResult` with `videoId` + `score`.
+   `pipeline.matchWithSearch()` (`pipeline.ts:33`) wraps that with the match cache, a PQueue and
+   injectable deps — the seam that makes mocked testing possible.
+6. **This machine cannot reach YouTube.** `back/AGENTS.md:82` is explicit: connections silently drop,
+   live matching needs `YTM_PROXY` or another host. So the match work can only be verified with
+   mocked search deps here — the same rule the rest of the converter already follows.
 
-**`GET /api/library/ext-logs?last&level&extensionId&userId`** — reads `ext.log`, `hideSensitive`,
-and returns the file path plus counts, so "nothing here" is explainable rather than mysterious.
+#### Decisions taken (confirmed with the user)
 
-**Client: `ext/ship.js`, loaded in the popup only.** Deliberately *not* inside `log.js`: log.js is
-also a content script, and shipping from there would POST the same batch once per frame.
-- only entries not already marked shipped (the flag lives on the entry, so it survives popup closes)
-- ships on popup open (so leftovers go out), on a timer while open, after a scan/import, and once
-  more on `pagehide` with `keepalive` so the closing popup still delivers
-- backoff 5s → 15s → 60s → 5min, stop after 6 attempts: a backend that is down must not become an
-  infinite "logging failed" loop, which is the failure mode a logging feature is most prone to
-- its own diagnostics stay at `debug`; a failure is recorded once per backoff step as a `warn`,
-  which is itself shippable — so the backend eventually learns its logs are not arriving
-- the popup shows the last ship result and has an explicit **Upload logs** button
+- **Scope of the rename: everything**, including `yaum` and the persisted storage keys, with a
+  one-time fallback read of the old keys so the saved server URL and logged-in user survive.
+- **Users: rename in place, keep ids**, so owned playlists and shares are not orphaned.
+- **YouTube links: build the match action, then export** — not a permanently empty export.
 
-**Timestamp fix.** Entries store `t: "HH:MM:SS.mmm"` only, which is fine for a session and wrong now
-that the buffer survives days — yesterday 12:00 and today 12:00 are indistinguishable. Add a full
-ISO `ts` at push time and ship that; keep `t` for display so the copy/paste format is unchanged.
+#### Work
 
-**Also:** `npm run logs -- --ext` tails `ext.log`; `AGENTS.md` gains both endpoints.
+1. **Rename to `plst`.** `mush` → `plst` in backend package/views/AGENTS; `yaum` → `plst` in the
+   extension manifest and package name, the five route titles, the page header; storage keys
+   `yaum.log` → `plst.log`, `yaum.userId` → `plst.userId`, `mush.server` → `plst.server` and
+   `yaum.logLevel` → `plst.logLevel`, each with a legacy-key fallback on read; `YAUM_API` →
+   `PLST_API` with `YAUM_API` still honoured. Rename is done with word-boundary regexes, and
+   everything under `node_modules`, `logs/`, `dist/` and `package-lock.json` is left alone.
+2. **Users.** A one-time, idempotent migration renames `friend` → `zaur` in place (one `UPDATE`,
+   so the id and every playlist/share it owns stay intact) and fixes `Artiom` → `Artyom`; the seed
+   becomes `artyom`/`Artyom` + `zaur`/`Zaur` so fresh installs agree. Migration runs once at
+   startup next to `seedUsers` and logs what it changed.
+3. **Create a playlist from the library.** Selection lives in `LibraryApi` as a signal (a `Set` of
+   song ids) so it survives paging and filter changes — otherwise selecting a song on page 1 and
+   paging to page 2 silently drops it, which is the kind of bug that only shows up on real data.
+   The library page gets a checkbox column, a selection toolbar with "create playlist" and "add to
+   playlist", and a per-row menu on the playlist page for adding a single song.
+4. **Match + export.** A new library match step that runs the existing matcher over a song and
+   persists `yt_video_id` / `match_score` / `matched_at`, exposed as an endpoint for one song and for
+   a whole playlist (batch, capped, per-song outcome reported). Export renders the plain
+   `https://music.youtube.com/watch?v=<videoId>` line list, and **lists unmatched songs by name
+   rather than dropping them silently** — a short export that looks complete is the dangerous case.
+   UI: match/copy per song, match-all + export on the playlist page.
+5. **Verify.** Backend `tsc` + tests, web tests, then exercise the new endpoints against the running
+   server with `curl` (match steps mocked or expected to fail as not-found on this host, and that
+   is reported as such rather than claimed as a success).
 
-Rejected: writing into `app.log` (noise); a MySQL table (heavier than a rotating append-only file for
-diagnostics, and the files already exist); shipping from the content script (duplicate batches).
+Open risk to watch: renaming `friend` → `zaur` in place assumes no *other* row already claims
+`zaur`; the migration must check that first and skip with a log line if it does.
 
-### RESULT — shipped, and the round trip is verified end to end
+### RESULT — all three shipped and verified
 
-`back/src/lib/ext-log.ts` adds a second `Logger` instance writing `logs/ext.log` (`errorFilename`
-the same file, `console: false`), so extension chatter gets its own rotated stream instead of
-burying the server trace. `POST /api/library/ext-logs` caps at 200 entries per request and keeps
-the **newest** (a truncated trace is most useful at its end), bounds `msg` to 500 chars, drops
-non-objects, and folds the client's `debug` into `log`. `data` is sanitized on **ingest**, so a
-token is masked on the way in, not only on the way out. `GET /api/library/ext-logs?last&level&
-extensionId&userId` reads it back with `hideSensitive`.
+**1. Renamed to `plst`.** 187 occurrences across 31 files. Two names were in play (`mush` in the
+backend, `yaum` in the extension and web app), plus the storage keys, the `YAUM_API`/`MUSH_RUN` env
+vars, and the `yaumLog`/`yaumShip` globals. Renamed package names to `plst`, `plst-ext`, `plst-web`;
+manifest name `plst`. **`DECISIONS*.md` deliberately keep the old names** — they are a historical
+record of what things were called, not product-facing docs.
 
-`ext/ship.js` ships from the popup only — deliberately not from `log.js`, which is also a content
-script, where every frame would POST an identical batch. Only unshipped entries go, marked shipped
-**after** the server accepts (an entry lost to a failed request is the worst outcome), 100 per
-request, one request in flight, backoff 5s→15s→60s→5min then stop. It ships on popup open, on a
-45s timer, after a scan or import, and once on `pagehide` with `keepalive`. Its own diagnostics
-stay at `debug`: a `warn` there would become an entry that must itself be shipped, which is exactly
-how a logging feature turns into the noise it was added to prevent.
+The risky part was the persisted keys, and each one gets a fallback read so nothing is lost:
+`plst.server`←`mush.server`, `plst.userId`←`yaum.userId`, `plst.logLevel`←`yaum.logLevel`, and
+`plst.log` adopts the old `yaum.log` **buffer** (otherwise the rename silently discards up to 300
+unshipped entries). `PLST_API` still honours `YAUM_API`; `PLST_RUN` still honours `MUSH_RUN`.
 
-**Four bugs of my own, all found by testing rather than reasoning:**
+*Process note:* the first rename attempt used `sed -i '' -e 's/\bmush\b/…'`. **BSD sed has no `\b`**,
+so those rules silently matched nothing while looking like they ran. A leftover grep caught it, and
+the fix was perl with real word boundaries. Nothing was half-renamed — the failing sed wrote no file.
 
-1. `ship()` sent the remainder by recursing into itself while `inFlight` still pointed at the
-   promise it was running inside — so the second batch awaited itself and the **first upload never
-   resolved at all**. Now an explicit loop; the 30s test timeout is what exposed it.
-2. `normalizeExtEntries` kept the *first* 200 entries of an oversized batch, while the plan (and
-   the reason you ship a log at all) says the newest. Slipped through because the first test batch
-   was under the cap.
-3. The client's timestamp was normalized and then **thrown away** — `Logger` stamps its own arrival
-   time, so every shipped entry claimed the second it arrived and true ordering was unrecoverable.
-   It is now kept as `data.extTs`.
-4. The stack was written as a separate `log`-level line, so `?level=error` — the one query you run
-   when something crashed — **dropped the stack**. It now rides on the error entry as
-   `data.extStack`, deliberately not named `stack`, because `Logger.error` treats a top-level
-   `stack` as an Error and then discards the whole payload.
+**2. Users.** The real DB now returns `1/artyom/Artyom` and `2/zaur/Zaur` — **id 2 preserved**, which
+was the whole point: playlists and shares owned by the old `friend` row stay attached. Done with a
+one-time migration (`library/migrations.ts`) rather than by editing the seed, because `seedUsers`
+upserts on `username` and would have inserted a *third* user beside the old row. The migration
+checks for a taken name first and skips loudly rather than violating `uq_users_username`, and is
+silent when there is nothing to rename — a first draft logged "target name already taken" on every
+fresh boot, which a test caught.
 
-Also fixed: the GET reported `count` as everything matched rather than what it returned, so
-`?last=3` claimed 10; and entries only had a time-of-day `t`, which is now meaningless since the
-buffer survives days, so each entry also stores a full ISO `ts`.
+Side effect worth knowing: the earlier `library: scan imported {tracks:3}` line I could not account
+for came from **the test suite**, not from you. The live DB had no songs.
 
-Verified against the **real extension and a real server**, not stubs: popup opened, logged a
-warning with a marker and a deliberate `TypeError`, pressed "Upload logs to server" → status line
-`✓ 2 entry(s) accepted by the server at 09:28:22`, and `GET /api/library/ext-logs` returned both
-with `extensionId`, `userId`, `extTs` and the full `extStack`, alongside the `ext logs ingested
-{received: 2, stored: 2}` line in `app.log`. `npm run logs -- --ext` tails it, and explains itself
-when the file is absent ("open the popup, or press Upload logs to server").
+**3a. Playlist from the library.** Backend already had `POST /playlists/:id/items`; the web client
+already had `createPlaylist()`/`addTracks()`. What was missing was the UI. Added a checkbox column, a
+selection toolbar ("create playlist" / "add to…" / "match" / "export"), and
+`POST /playlists {songIds}` as **one transaction** — create-then-add over HTTP leaves an empty
+playlist behind whenever the second call fails. Selection state lives in `LibraryApi`, not the page,
+because the songs resource is paged and a page-held selection is rebuilt from the visible rows.
 
-Tests: `back` 61 (9 new for the endpoint), `ext` 27 (8 new for shipping), `web` 17.
+**3b. YouTube Music links.** The blocker was real: `songs.yt_video_id` existed but **nothing had ever
+written it**, so the export would have been permanently empty. `library/match.ts` reuses the existing
+`matcher.ts` rather than reimplementing scoring, with `searchSongs` injected for tests. Endpoints:
+`POST /songs/:id/match`, `POST /playlists/:id/match` (capped 50), `GET /export/youtube`.
 
-### "`(Object.<anonymous>)` on startup" — a useless caller, found by counting
+**Two findings that changed the work:**
 
-Reported as strange, and it was: `server ready (Object.<anonymous>)`. Following it up properly
-(counting attributions across the whole log rather than looking at one line) showed **1004 lines —
-a third of the log — carried `Object.<anonymous>`**, the most common attribution in the file and a
-label that names nothing. The cause was mine: the `preHandler` and `onReady` hooks are anonymous
-arrows, so `captureCaller()` fell back to V8's rendering of an unnamed function. Every other hook
-already passed an explicit `fn` (`onResponse`, `notFound`, `preHandler` on its own error path), which
-is also why those were fine.
+- **`back/AGENTS.md:82` was wrong.** It claimed this machine cannot reach YouTube, so matching had to
+  be mocked. It can: `YTM_PROXY` is set in `.env`, and a live search returned 20 real candidates,
+  `Roxanne → fZheUzgIFEk` at score **1.00**. Only *direct* connections are blocked. Corrected in
+  AGENTS.md — that line was actively steering work away from real verification.
+- **My first export was quietly wrong.** A live playlist match produced `Roxanne → WMl1xKJeuuQ`, which
+  is **"Message In A Bottle — The Police"** (score 0.568, `uncertain`), and the export pasted it as
+  if it were Roxanne. Cause: I treated any stored `yt_video_id` as good. Now derived from the score:
+  confident matches are links, `uncertain` ones are listed separately and **commented out** of the
+  text, and unmatched songs are still named. Verified after the fix — pasting yields only
+  `KJEzFvXx3Xw`, with the bad one flagged for review.
 
-Two things followed from looking instead of guessing:
+Verified live on a throwaway MySQL DB (dropped afterwards; the real DB was not used for test tracks):
+create-from-selection preserves order and rejects unknown ids with a 400 naming them; the export lists
+unmatched songs instead of dropping them; a real match stores the video id.
 
-- **Poll suppression was not broken.** Most of the 1004 were poll requests, which should never be
-  logged — so the obvious theory was "suppression broke and floods the log". The timestamps said
-  otherwise: they all fall between 22:45 on 30 Sep and 09:04 today, i.e. before suppression existed.
-  Confirmed live — 3× `/me` + 1× `/users` against the running server produced **zero** lines. The
-  rest of the `Object.<anonymous>` lines are the extension's own uploads.
-- **The log tail was genuinely out of order**, which is what made the output look strange:
-  `npm run logs` printed `app.log` and then `error.log` file by file, so an error from *yesterday*
-  (20:47) appeared after today's startup lines. It now merges by timestamp and sorts. While fixing
-  that, `--last N` was found to mean N *per file* — `--last 200` printed 400 and could show an older
-  error below a newer one. It is now the newest N of the merged timeline.
-
-Both have tests (`test/logs-tail.test.ts`, 7 cases) because the tailer is what AGENTS.md tells you to
-run first: an output that reorders history is worse than no output. Startup now reads:
-
-```
-users seeded        (LibraryStore.seedUsers)
-genre provider      (describeProvider)
-server ready        (onReady)
-HTTP POST …/ext-logs (preHandler)
-ext logs ingested   (ext-logs)
--> 200 POST …/ext-logs in 2ms  (onResponse)
-```
-
-`back` 68 tests, `ext` 27, `web` 17.
+`back` 86 tests (11 files), `ext` 27, `web` 25; `tsc` clean in both TS projects. Nothing committed.

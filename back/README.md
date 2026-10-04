@@ -1,4 +1,4 @@
-# mush — Yandex Music → YouTube Music links
+# plst — Yandex Music → YouTube Music links
 
 Web service that converts Yandex Music playlists, liked tracks, and albums into
 **YouTube Music links** — no YouTube-side auth or writes; you get match reports

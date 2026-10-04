@@ -11,9 +11,11 @@ import type {
   ImportRow,
   Me,
   Playlist,
+  MatchResultDto,
   PlaylistDetail,
   SongsPage,
   User,
+  YoutubeExport,
 } from './models';
 import { Session } from './session';
 
@@ -108,6 +110,45 @@ export class LibraryApi {
     this.reloadTickSignal.update((n) => n + 1);
   }
 
+  // ------------------------------------------------------------ selection
+  //
+  // Lives here rather than in the library page because the songs resource is PAGED: a selection
+  // held by the page component would be rebuilt from whatever rows are currently rendered, so
+  // ticking a song on page 1 and then pressing "next" would silently drop it. This is the same
+  // reason the search inputs are here instead of in the component.
+  private readonly selectedIds = signal<ReadonlySet<number>>(new Set());
+  readonly selection = this.selectedIds.asReadonly();
+  readonly selectedCount = computed(() => this.selectedIds().size);
+  readonly selectedList = computed(() => [...this.selectedIds()]);
+
+  isSelected(songId: number): boolean {
+    return this.selectedIds().has(songId);
+  }
+
+  toggleSelected(songId: number): void {
+    this.selectedIds.update((set) => {
+      const next = new Set(set);
+      if (!next.delete(songId)) next.add(songId);
+      return next;
+    });
+  }
+
+  /** Only for the rows currently on screen — selecting every song in a filtered library is a mistake. */
+  selectPage(songIds: number[], on: boolean): void {
+    this.selectedIds.update((set) => {
+      const next = new Set(set);
+      for (const id of songIds) {
+        if (on) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+  }
+
+  clearSelection(): void {
+    this.selectedIds.set(new Set());
+  }
+
   // -------------------------------------------------------------- mutations
 
   createPlaylistFromImport(importId: number, name: string, songIds?: number[]): Observable<{ playlistId: number; trackCount: number }> {
@@ -119,6 +160,14 @@ export class LibraryApi {
 
   createPlaylist(name: string, description: string | null): Observable<{ playlistId: number }> {
     return this.http.post<{ playlistId: number }>(`${BASE}/playlists`, { name, description });
+  }
+
+  /**
+   * "Create a playlist from the library" in one request. Two calls (create, then add) would leave an
+   * empty playlist behind if the second failed, and the user would have to clean it up by hand.
+   */
+  createPlaylistFromSelection(name: string, songIds: number[]): Observable<{ playlistId: number; added: number }> {
+    return this.http.post<{ playlistId: number; added: number }>(`${BASE}/playlists`, { name, songIds });
   }
 
   renamePlaylist(playlistId: number, name: string): Observable<{ ok: true }> {
@@ -152,6 +201,30 @@ export class LibraryApi {
   /** Used by the extension replay in tests; not called from the app itself. */
   scan(payload: { userId: number; tracks: unknown[]; pageUrl?: string }): Observable<ScanResponse> {
     return this.http.post<ScanResponse>(`${BASE}/scan`, payload);
+  }
+
+  // ------------------------------------------------------- youtube music
+
+  matchSong(songId: number): Observable<MatchResultDto> {
+    return this.http.post<MatchResultDto>(`${BASE}/songs/${songId}/match`, {});
+  }
+
+  matchPlaylist(playlistId: number): Observable<{ playlistId: number; total: number; matched: number }> {
+    return this.http.post<{ playlistId: number; total: number; matched: number }>(
+      `${BASE}/playlists/${playlistId}/match`,
+      {},
+    );
+  }
+
+  /**
+   * The export. Asks for JSON rather than text because the UI has to show "12 of 15 matched" —
+   * text/plain cannot say that, and a bare list of links is exactly the output that hides its own
+   * gaps.
+   */
+  exportYoutube(target: { playlistId: number } | { songIds: number[] }): Observable<YoutubeExport> {
+    const qs =
+      'playlistId' in target ? `playlistId=${target.playlistId}` : `songIds=${target.songIds.join(',')}`;
+    return this.http.get<YoutubeExport>(`${BASE}/export/youtube?${qs}`);
   }
 
   readonly songCount = computed(() => this.songs.value()?.total ?? 0);

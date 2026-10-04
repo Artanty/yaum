@@ -14,8 +14,8 @@ import type { LibraryStore } from '../src/library/store.js';
 // A stand-in store: these tests are about the logging layer, so every call is a fixed answer and
 // no database is involved. The real store is covered by library.test.ts and e2e-library.ts.
 const stubStore = {
-  listUsers: async () => [{ id: 1, username: 'artyom', display_name: 'Artiom' }],
-  getUser: async (id: number) => (id === 1 ? { id: 1, username: 'artyom', display_name: 'Artiom' } : null),
+  listUsers: async () => [{ id: 1, username: 'artyom', display_name: 'Artyom' }],
+  getUser: async (id: number) => (id === 1 ? { id: 1, username: 'artyom', display_name: 'Artyom' } : null),
   importScan: async (opts: { userId: number; tracks: unknown[] }) => ({
     importId: 7,
     trackCount: opts.tracks.length,
@@ -129,7 +129,7 @@ describe('a logged line is not lost when the process exits right after', () => {
   // AGENTS.md tells whoever is debugging to read the FILE, so a line lost to exit is worse than no
   // line at all. This pins the fix: flush() must make the entry readable on disk.
   it('lands in the log file once flush() resolves', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'yaum-logflush-'));
+    const dir = await mkdtemp(join(tmpdir(), 'plst-logflush-'));
     try {
       const log = new Logger({ dir, console: false });
       log.log('flush-me', { why: 'test' }, 'flushTest');

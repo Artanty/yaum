@@ -12,6 +12,7 @@ import { fromForm } from './url.js';
 import { logger } from './lib/logger.js';
 import { initLibrary } from './library/schema.js';
 import { LibraryStore, SEED_USERS } from './library/store.js';
+import { migrateLibraryUsers } from './library/migrations.js';
 import { registerLibraryRoutes, LIBRARY_PREFIX } from './library/routes.js';
 import { describeProvider, NULL_GENRE_PROVIDER } from './library/genre.js';
 
@@ -134,7 +135,7 @@ export function buildApp(store: Store, library?: LibraryStore) {
     engine: { ejs },
     root: viewsRoot,
   });
-  // The Angular dev server is a different origin, so the library API needs CORS for it. The mush
+  // The Angular dev server is a different origin, so the library API needs CORS for it. The plst
   // endpoints do not: the extension posts application/x-www-form-urlencoded, which is
   // CORS-safelisted and was already working without this. Only JSON callers (ng serve, and the
   // library API) benefit.
@@ -245,13 +246,15 @@ export function buildApp(store: Store, library?: LibraryStore) {
 }
 
 const store = await openStore();
-// The library shares the mush DB (same DB_* env, same schema file) but gets its own pool: Store's
+// The library shares the plst DB (same DB_* env, same schema file) but gets its own pool: Store's
 // pool is private, and a second 10-connection pool to one database is well under MySQL's default
 // max_connections. initLibrary runs on the SAME pool the store will query, so the schema is
 // guaranteed to exist before the first request rather than being raced by two pools.
 const libraryPool = buildPool();
 const library = new LibraryStore(libraryPool);
 await initLibrary(libraryPool);
+// Renames existing rows first, so seedUsers cannot insert a fresh row beside an old one.
+await migrateLibraryUsers(libraryPool);
 await library.seedUsers(SEED_USERS);
 describeProvider(NULL_GENRE_PROVIDER);
 const app = buildApp(store, library);
@@ -259,7 +262,7 @@ const app = buildApp(store, library);
 const host = settings.host;
 const port = Number(process.env.PORT ?? 8000);
 
-if (process.argv[1]?.endsWith('server.ts') || process.argv[1]?.endsWith('server.js') || process.env.MUSH_RUN === '1') {
+if (process.argv[1]?.endsWith('server.ts') || process.argv[1]?.endsWith('server.js') || (process.env.PLST_RUN === '1' || process.env.MUSH_RUN === '1')) {
   // Registered here, not inside buildApp, so importing the app in tests cannot leak signal
   // listeners. A timer backs this up because the counters are also worth seeing while running.
   const skipTimer = setInterval(() => void app.reportSkipCounters('periodic'), 5 * 60_000);

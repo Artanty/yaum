@@ -13,7 +13,7 @@
   const find = document.getElementById("find");
   const RANK = { debug: 10, info: 20, warn: 30, error: 40 };
 
-  const all = () => yaumLog.entries();
+  const all = () => plstLog.entries();
 
   const filtered = () => {
     const want = levelSel.value;
@@ -55,7 +55,7 @@
 
   const copy = async (text, what) => {
     try {
-      await yaumLog.flush();
+      await plstLog.flush();
       await navigator.clipboard.writeText(text || "(nothing to copy)");
       const btn = what === "all" ? document.getElementById("copy") : document.getElementById("copyFiltered");
       const was = btn.textContent;
@@ -66,7 +66,7 @@
     }
   };
 
-  document.getElementById("copy").addEventListener("click", () => copy(yaumLog.text(), "all"));
+  document.getElementById("copy").addEventListener("click", () => copy(plstLog.text(), "all"));
   document.getElementById("copyFiltered").addEventListener("click", () => {
     copy(filtered().map((e) => {
       const d = e.data === undefined ? "" : ` ${JSON.stringify(e.data)}`;
@@ -74,21 +74,21 @@
     }).join("\n"), "filtered");
   });
   document.getElementById("refresh").addEventListener("click", async () => {
-    await yaumLog.init();
+    await plstLog.init();
     paint();
   });
   document.getElementById("clear").addEventListener("click", () => {
-    yaumLog.clear();
+    plstLog.clear();
     paint();
   });
   levelSel.addEventListener("change", paint);
   find.addEventListener("input", paint);
 
-  yaumLog.init().then(paint);
+  plstLog.init().then(paint);
   // Cheap poll: the log is written by the popup and the content script, and this page is not
   // notified when they do. 1s is invisible to a human reading a log.
   setInterval(async () => {
-    await yaumLog.init();
+    await plstLog.init();
     paint();
   }, 1000);
 })();

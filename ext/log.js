@@ -12,7 +12,8 @@
  */
 (() => {
   const MAX = 300;
-  const KEY = "yaum.log";
+  const KEY = "plst.log";
+  const LEGACY_KEY = "yaum.log";
   // Entries predate the `shipped` flag; treat those as unsent so nothing is silently lost.
   const isUnshipped = (e) => !e || e.shipped !== true;
   const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
@@ -33,7 +34,16 @@
     try {
       const got = await storage.get(KEY);
       const rows = got?.[KEY];
-      if (Array.isArray(rows) && rows.length) mem = rows.slice(-MAX);
+      if (Array.isArray(rows) && rows.length) {
+        mem = rows.slice(-MAX);
+        return;
+      }
+      // The buffer key was renamed with the app (yaum.log -> plst.log). Adopt the old buffer rather
+      // than starting empty, otherwise the rename silently discards up to 300 pending entries that
+      // have not been shipped to the backend yet.
+      const legacy = await storage.get(LEGACY_KEY);
+      const oldRows = legacy?.[LEGACY_KEY];
+      if (Array.isArray(oldRows) && oldRows.length) mem = oldRows.slice(-MAX);
     } catch {
       /* keep whatever is in memory */
     }
@@ -99,15 +109,17 @@
   // frames, so it is guarded — a log call must never be the thing that breaks the page.
   const threshold = () => {
     let want = "info";
-    try {
-      want = (globalThis.localStorage?.getItem("yaum.logLevel") || "info").toLowerCase();
-    } catch {
+try {
+        want = (globalThis.localStorage?.getItem("plst.logLevel")
+          // renamed with the app; honour the old value so a saved "debug" preference survives
+          ?? globalThis.localStorage?.getItem("yaum.logLevel") ?? "info").toLowerCase();
+      } catch {
       /* opaque origin: fall through to the default */
     }
     return LEVELS[want] ?? LEVELS.info;
   };
 
-  const yaumLog = {
+  const plstLog = {
     LEVELS,
     /** Load persisted entries. Call once at startup; safe to call twice. */
     async init() {
@@ -153,6 +165,6 @@
     flush: () => queued,
   };
 
-  globalThis.yaumLog = yaumLog;
-  if (typeof module !== "undefined" && module.exports) module.exports = yaumLog;
+  globalThis.plstLog = plstLog;
+  if (typeof module !== "undefined" && module.exports) module.exports = plstLog;
 })();

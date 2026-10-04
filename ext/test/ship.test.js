@@ -70,8 +70,8 @@ const load = async (page, { failTimes = 0, withRuntime = true } = {}) => {
           },
         },
       };
-      localStorage.setItem("mush.server", window.__origin);
-      localStorage.setItem("yaum.userId", "1");
+      localStorage.setItem("plst.server", window.__origin);
+      localStorage.setItem("plst.userId", "1");
       // Real fetch against the stubbed route, with an optional failure counter.
       const realFetch = window.fetch.bind(window);
       window.fetch = async (url, init) => {
@@ -94,16 +94,16 @@ const load = async (page, { failTimes = 0, withRuntime = true } = {}) => {
     },
     { log: LOG_JS, ship: SHIP_JS }
   );
-  await page.evaluate(() => globalThis.yaumLog.init());
+  await page.evaluate(() => globalThis.plstLog.init());
 };
 
 test("uploads entries and marks them shipped so they are not sent twice", async ({ page }) => {
   await load(page);
   const first = await page.evaluate(async () => {
-    yaumLog.info("popup", "hello", { tracks: 2 });
-    await yaumLog.flush();
-    const r = await yaumShip.ship();
-    return { status: r, pending: yaumLog.pending().length, total: yaumLog.entries().length };
+    plstLog.info("popup", "hello", { tracks: 2 });
+    await plstLog.flush();
+    const r = await plstShip.ship();
+    return { status: r, pending: plstLog.pending().length, total: plstLog.entries().length };
   });
   expect(first.total).toBe(1);
   expect(first.pending).toBe(0); // marked shipped
@@ -113,8 +113,8 @@ test("uploads entries and marks them shipped so they are not sent twice", async 
   // Second popup open: nothing left to send, and no request is made at all.
   const before = requestCount;
   const second = await page.evaluate(async () => {
-    const r = await yaumShip.ship();
-    return { state: r.state, status: yaumShip.status().state };
+    const r = await plstShip.ship();
+    return { state: r.state, status: plstShip.status().state };
   });
   expect(second.state).toBe("empty");
   expect(requestCount).toBe(before);
@@ -123,10 +123,10 @@ test("uploads entries and marks them shipped so they are not sent twice", async 
 test("sends the whole shape the backend validates: extensionId, userId, ts, level, scope, msg", async ({ page }) => {
   await load(page);
   await page.evaluate(async () => {
-    yaumLog.info("popup", "import requested", { tracks: 2, server: "http://x" });
-    yaumLog.error("popup", "boom", new Error("kaboom"));
-    await yaumLog.flush();
-    await yaumShip.ship();
+    plstLog.info("popup", "import requested", { tracks: 2, server: "http://x" });
+    plstLog.error("popup", "boom", new Error("kaboom"));
+    await plstLog.flush();
+    await plstShip.ship();
   });
 
   expect(lastBody.extensionId).toBe("testextensionid000000");
@@ -153,9 +153,9 @@ test("an older entry stored without a shipped flag is still uploaded", async ({ 
   await load(page);
   await page.evaluate(async () => {
     // What log.js wrote before the flag existed.
-    window.__mem["yaum.log"] = [{ t: "09:00:00.000", ts: "2026-10-01T09:00:00.000Z", level: "warn", scope: "scan", msg: "legacy" }];
-    await yaumLog.init();
-    await yaumShip.ship();
+    window.__mem["plst.log"] = [{ t: "09:00:00.000", ts: "2026-10-01T09:00:00.000Z", level: "warn", scope: "scan", msg: "legacy" }];
+    await plstLog.init();
+    await plstShip.ship();
   });
   expect(lastBody.entries).toHaveLength(1);
   expect(lastBody.entries[0].msg).toBe("legacy");
@@ -168,7 +168,7 @@ test("a failed upload keeps the entries pending and does not throw", async ({ pa
       runtime: { id: "x" },
       storage: { local: { get: async (k) => ({ [k]: window.__mem[k] }), set: async (o) => Object.assign(window.__mem, o) } },
     };
-    localStorage.setItem("mush.server", window.__origin);
+    localStorage.setItem("plst.server", window.__origin);
     window.__fails = 2;
     const realFetch = window.fetch.bind(window);
     window.fetch = async (url, init) => {
@@ -189,10 +189,10 @@ test("a failed upload keeps the entries pending and does not throw", async ({ pa
   );
 
   const out = await page.evaluate(async () => {
-    yaumLog.info("popup", "kept for later");
-    await yaumLog.flush();
-    const r = await yaumShip.ship();
-    return { state: r.state, error: r.error, attempts: r.attempts, pending: yaumLog.pending().length };
+    plstLog.info("popup", "kept for later");
+    await plstLog.flush();
+    const r = await plstShip.ship();
+    return { state: r.state, error: r.error, attempts: r.attempts, pending: plstLog.pending().length };
   });
   // Not delivered, so NOT marked shipped — an entry lost to a failed request is the worst outcome.
   expect(out.state).toBe("retrying");
@@ -207,7 +207,7 @@ test("after the attempts run out it stops trying, and describe() says why", asyn
       runtime: { id: "x" },
       storage: { local: { get: async (k) => ({ [k]: window.__mem[k] }), set: async (o) => Object.assign(window.__mem, o) } },
     };
-    localStorage.setItem("mush.server", window.__origin);
+    localStorage.setItem("plst.server", window.__origin);
     window.__fetches = 0;
     window.fetch = async () => {
       window.__fetches += 1;
@@ -224,23 +224,23 @@ test("after the attempts run out it stops trying, and describe() says why", asyn
   );
 
   const out = await page.evaluate(async () => {
-    yaumLog.info("popup", "never arrives");
-    await yaumLog.flush();
+    plstLog.info("popup", "never arrives");
+    await plstLog.flush();
     // Automatic ships only — the popup opening over and over must not hammer a backend that is down.
     const states = [];
-    for (let i = 0; i < 9; i += 1) states.push((await yaumShip.ship()).state);
+    for (let i = 0; i < 9; i += 1) states.push((await plstShip.ship()).state);
     const autoFetches = window.__fetches;
     // Read the wording now: the manual attempt below legitimately bumps the counter.
-    const describe = yaumShip.describe();
+    const describe = plstShip.describe();
     // The manual button is the escape hatch and deliberately ignores the spent backoff.
-    const forced = (await yaumShip.ship({ force: true })).state;
+    const forced = (await plstShip.ship({ force: true })).state;
     return {
       states,
       autoFetches,
       describe,
       forced,
       forcedFetches: window.__fetches,
-      pending: yaumLog.pending().length,
+      pending: plstLog.pending().length,
     };
   });
   // Six attempts, then it stops on its own — no endless "shipping failed" churn.
@@ -262,7 +262,7 @@ test("a 500 or a non-JSON reply is a failure, not a silent success", async ({ pa
       runtime: { id: "x" },
       storage: { local: { get: async (k) => ({ [k]: window.__mem[k] }), set: async (o) => Object.assign(window.__mem, o) } },
     };
-    localStorage.setItem("mush.server", window.__origin);
+    localStorage.setItem("plst.server", window.__origin);
   });
   await page.goto(`${origin}/`, { waitUntil: "domcontentloaded" });
   await page.evaluate(
@@ -275,10 +275,10 @@ test("a 500 or a non-JSON reply is a failure, not a silent success", async ({ pa
   replyMode = "error";
 
   const out = await page.evaluate(async () => {
-    yaumLog.info("popup", "x");
-    await yaumLog.flush();
-    const r = await yaumShip.ship();
-    return { state: r.state, error: r.error, pending: yaumLog.pending().length };
+    plstLog.info("popup", "x");
+    await plstLog.flush();
+    const r = await plstShip.ship();
+    return { state: r.state, error: r.error, pending: plstLog.pending().length };
   });
 
   expect(out.state).toBe("retrying");
@@ -288,16 +288,16 @@ test("a 500 or a non-JSON reply is a failure, not a silent success", async ({ pa
 
 test("describe() is readable before anything has been sent", async ({ page }) => {
   await load(page);
-  expect(await page.evaluate(() => yaumShip.describe())).toBe("not sent yet");
+  expect(await page.evaluate(() => plstShip.describe())).toBe("not sent yet");
 });
 
 test("batches at most 100 entries per request and drains the rest", async ({ page }) => {
   await load(page);
   const out = await page.evaluate(async () => {
-    for (let i = 0; i < 250; i += 1) yaumLog.info("scan", `step ${i}`);
-    await yaumLog.flush();
-    await yaumShip.ship();
-    return { sent: yaumShip.status().sent, pending: yaumLog.pending().length };
+    for (let i = 0; i < 250; i += 1) plstLog.info("scan", `step ${i}`);
+    await plstLog.flush();
+    await plstShip.ship();
+    return { sent: plstShip.status().sent, pending: plstLog.pending().length };
   });
   // 250 entries at 100 per request: never one giant POST.
   expect(batchSizes).toEqual([100, 100, 50]);

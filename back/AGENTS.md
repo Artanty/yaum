@@ -4,7 +4,7 @@ Context for AI agents working in this repository. Read this before making change
 
 ## What this project is
 
-**mush** — a web service that converts Yandex Music collections (playlist URL, album URL, liked tracks) — or track JSON pasted straight from the YaMusic Share browser extension (`mode=json`) — into **YouTube Music links**. There is deliberately **no YouTube Music auth or writes**: output is a per-track match report and a plain list of `https://music.youtube.com/watch?v=<videoId>` links (links work anonymously).
+**plst** — a web service that converts Yandex Music collections (playlist URL, album URL, liked tracks) — or track JSON pasted straight from the plst browser extension (`mode=json`) — into **YouTube Music links**. There is deliberately **no YouTube Music auth or writes**: output is a per-track match report and a plain list of `https://music.youtube.com/watch?v=<videoId>` links (links work anonymously).
 
 Originally built in Python (FastAPI + yandex-music + ytmusicapi); **fully rewritten to Node.js/TypeScript** in-place — no Python code remains (except historical mention in git-less tree; don't resurrect it).
 
@@ -79,17 +79,18 @@ Match status: `matched` (score ≥ MATCH_ACCEPT 0.75) / `uncertain` (≥ 0.55) /
 - Internally uses **axios**: it honours `HTTP(S)_PROXY`/`http_proxy` env vars (set via `applyYtmProxy()`), and **has NO default timeout** → blocked YouTube hangs forever. Fix already in `ytmusic/search.ts`: `axios.defaults.timeout = settings.ytmTimeout` before constructing the client (its `axios.create()` inherits global defaults).
 - `searchSongs()` returns `{videoId, name, artist:{name}, duration (seconds|null)}` — mapped to `Candidate{videoId,title,artists,duration}` in `search.ts`.
 - `axios` is a DECLARED dependency on purpose: `ytmusic/search.ts` imports it only to set `axios.defaults.timeout` (ytmusic-api creates its client from a plain `axios.create()`, which inherits global defaults, and has no timeout of its own - blocked YouTube would hang forever). It used to resolve only as a ytmusic-api transitive, so a transitive bump could break search at runtime.
-- **The dev machine for this project cannot reach YouTube** (connections silently drop, curl times out; Yandex is reachable). Search behavior is therefore verified with mocked deps only; live match quality must be checked behind `YTM_PROXY` or on another host. Expect long wall-clock times when YouTube is unreachable (retries × timeouts) — this is correct behavior, not a bug.
+- **YouTube is only reachable THROUGH THE PROXY, not directly.** An earlier version of this line said the dev machine "cannot reach YouTube" flatly — that is wrong as of 2026-10-02 and was costing real work. Verified live: `YTM_PROXY` **is set in `.env`**, and with it a real search returns real candidates (20 for "The Police Roxanne"; `Roxanne` → `fZheUzgIFEk` at score **1.00**). Direct/unproxied connections still drop. So: **match and export features can be verified live on this box** — do not hide behind mocked deps, and do not assume matching is impossible here. Mocked deps are still the right tool for deterministic scoring tests. Expect long wall-clock times when the proxy is unset or YouTube is actually blocked (retries × timeouts) — that is correct behavior, not a bug.
+- **An `uncertain` match is not a link.** Verified live: a Yandex "Roxanne" carrying a wrong duration matched to *"Message In A Bottle — The Police"* at 0.57, and an earlier version of the export pasted it as if it were Roxanne. `library/youtube.ts` therefore puts anything below `matchAccept` in a separate `uncertain` list, commented out of the text output, instead of dropping it or linking it. The same reasoning already applied to the popup's PERFECT threshold.
 
 ### Environment quirks (this dev box)
 - Node v24 + npm 11 present; npm registry reachable. Python 3.10 exists but system python has **no ensurepip** (use `~/.local/bin/virtualenv` if python tooling ever needed).
 - Server smoke-test pattern: `PORT=xxxx nohup node dist/server.js >log 2>&1 & echo $! >pid` then curl, `kill $(cat pid)`. Avoid `pkill -f <pattern>` where the pattern matches the command itself (it killed its own shell once).
-- `mush.db*` SQLite files may linger from old dev runs (gitignored). The app now stores everything in **MySQL** (see `.env`: `DB_HOST`/`DB_PORT` (3306)/`DB_DATABASE`/`DB_USERNAME`/`DB_PASSWORD`); tables auto-create on startup via `openStore()`. Local MySQL (`brew services start mysql`, root/no password) is used by the test suite (`test/mysql.ts` creates a throwaway `mush_test_*` database).
+- `plst.db*` SQLite files may linger from old dev runs (gitignored). The app now stores everything in **MySQL** (see `.env`: `DB_HOST`/`DB_PORT` (3306)/`DB_DATABASE`/`DB_USERNAME`/`DB_PASSWORD`); tables auto-create on startup via `openStore()`. Local MySQL (`brew services start mysql`, root/no password) is used by the test suite (`test/mysql.ts` creates a throwaway `plst_test_*` database).
 
 ## Conventions & gotchas
 - ESM + TS NodeNext: **relative imports need `.js` extensions** (`./config.js`) in `src/`.
 - `npm start` runs `tsx src/server.ts` — the render.yaml deploy is `npm install` + `npm run start` with **no build step**, so `dist/` is optional there. `tsx` is a runtime dependency by design (survives `NODE_ENV=production` installs).
-- `src/server.ts` starts listening only when run directly (`node dist/server.js` / `tsx src/server.ts` / `MUSH_RUN=1`); `buildApp(store)` is exported so tests could import it — tests currently don't need a server.
+- `src/server.ts` starts listening only when run directly (`node dist/server.js` / `tsx src/server.ts` / `PLST_RUN=1`); `buildApp(store)` is exported so tests could import it — tests currently don't need a server.
 - Views resolved from `process.cwd()/views` — run server from repo root.
 - Pipeline is testable by passing `{fetchCollections, searchSongs}` fakes as `PipelineDeps` — keep this pattern; no network in tests.
 - Fastify v5: reply.view via `@fastify/view` with `engine: { ejs }` (object form); pass all template vars through `reply.view(name, data)` (no `global` option in v11).
@@ -106,3 +107,21 @@ Match status: `matched` (score ≥ MATCH_ACCEPT 0.75) / `uncertain` (≥ 0.55) /
 - Commit `.env` or tokens (gitignored; YANDEX_TOKEN is a secret).
 - Add YTM write/auth unless the user explicitly asks — links-only was a deliberate decision.
 - Trust that public playlist fetching needs auth (it doesn't, with the right UA) or that YouTube is reachable from the dev host (it isn't).
+
+### Library: YouTube matching and the link export (added 2026-10-02)
+
+- `library/match.ts` wraps the EXISTING matcher (`matcher.ts`) for library songs. It deliberately does
+  not reimplement scoring — a second implementation would drift and quietly disagree with the
+  converter. `searchSongs` is injected (`MatchDeps`) so scoring tests stay deterministic.
+- **Before this, nothing ever wrote `songs.yt_video_id`** — the converter wrote video ids into its own
+  job tables, so a library song could never produce a YouTube link and any export would be empty.
+- Endpoints: `POST /songs/:id/match`, `POST /playlists/:id/match` (capped at 50/request), and
+  `GET /export/youtube?playlistId=|songIds=&format=text|json`.
+- The export never silently drops songs: unmatched songs are listed by name as comments, and
+  `uncertain` matches are commented out entirely (see the "uncertain is not a link" note above).
+- "Create a playlist from the library" is `POST /playlists` with `songIds` — one transaction
+  (`store.createPlaylistWithSongs`), because create-then-add over HTTP leaves an empty playlist behind
+  whenever the second call fails.
+- `web/src/app/core/library-api.ts` owns the song selection signal, deliberately NOT the library page
+  component: the songs resource is paged, so a page-held selection is rebuilt from the visible rows and
+  page 1's ticks vanish when you press "next". Covered by `library-api.spec.ts`.

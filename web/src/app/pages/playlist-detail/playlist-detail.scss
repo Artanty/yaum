@@ -230,3 +230,124 @@ section h2 {
   color: #b3261e;
   font-size: 13px;
 }
+
+.yt {
+  margin-top: 16px;
+
+  .ytRow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-size: 13px;
+    color: #626a77;
+
+    strong {
+      color: #14161a;
+    }
+
+    button {
+      padding: 5px 10px;
+      border: 1px solid #d3d7de;
+      border-radius: 6px;
+      background: #fff;
+      font-size: 13px;
+      cursor: pointer;
+
+      &:disabled {
+        color: #9aa1ad;
+        cursor: default;
+      }
+    }
+  }
+
+  .export {
+    margin-top: 10px;
+    padding: 12px;
+    border: 1px solid #d3d7de;
+    border-radius: 8px;
+    background: #fbfcfe;
+
+    .head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+      font-size: 13px;
+
+      .warn {
+        color: #b3261e;
+      }
+
+      .spacer {
+        flex: 1;
+      }
+
+      button {
+        padding: 5px 10px;
+        border: 1px solid #d3d7de;
+        border-radius: 6px;
+        background: #fff;
+        font-size: 13px;
+        cursor: pointer;
+
+        &.ghost {
+          background: transparent;
+        }
+      }
+    }
+
+    textarea {
+      width: 100%;
+      box-sizing: border-box;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      padding: 8px;
+      border: 1px solid #d3d7de;
+      border-radius: 6px;
+      resize: vertical;
+    }
+
+    .chipgap {
+      display: inline-block;
+      margin: 2px 4px 0 0;
+      padding: 1px 7px;
+      border: 1px solid #d3d7de;
+      border-radius: 10px;
+      font-size: 11px;
+    }
+  }
+}
+
+.tracks .ytlink {
+  width: 44px;
+  text-align: right;
+
+  a {
+    color: #1a56c4;
+    font-size: 12px;
+  }
+}
+
+.linky {
+  border: none;
+  background: none;
+  padding: 0;
+  color: #1a56c4;
+  cursor: pointer;
+  font-size: 12px;
+  text-decoration: underline;
+
+  &:disabled {
+    color: #9aa1ad;
+    cursor: default;
+    text-decoration: none;
+  }
+}
+
+.yt .export .warnp {
+  color: #b3261e;
+  font-size: 12px;
+  margin: 8px 0 0;
+}

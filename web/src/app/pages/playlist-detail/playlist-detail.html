@@ -116,6 +116,49 @@
     </section>
   }
 
+  <section class="yt">
+    <div class="ytRow">
+      <strong>{{ matchedCount() }}</strong> of {{ items().length }} matched with YouTube Music
+      <button [disabled]="busy() || matchingAll() || !items().length" (click)="matchAll()">
+        {{ matchingAll() ? 'matching…' : 'match all' }}
+      </button>
+      <button [disabled]="busy() || !items().length" (click)="exportLinks()">export links</button>
+    </div>
+
+    @if (export(); as report) {
+      <div class="export">
+        <div class="head">
+          <strong>{{ report.matched }}</strong> of {{ report.total }} matched
+          @if (report.unmatched.length) {
+            <span class="warn">{{ report.unmatched.length }} without a match</span>
+          }
+          <span class="spacer"></span>
+          <button (click)="copyExport(report)">copy links</button>
+          <button class="ghost" (click)="dismissExport()">close</button>
+        </div>
+        <textarea readonly [value]="report.text" rows="10" aria-label="The exported links"></textarea>
+        @if (report.uncertain.length) {
+          <p class="warnp">
+            {{ report.uncertain.length }} uncertain match(es) are in the export as comments, not as
+            links — pasting will skip them on purpose:
+            @for (u of report.uncertain; track u.songId) {
+              <span class="chipgap">{{ u.title }} → {{ u.url }}</span>
+            }
+          </p>
+        }
+        @if (report.unmatched.length) {
+          <p class="muted">
+            Unmatched songs are listed as comments in the export, so a short list cannot look like a
+            complete one:
+            @for (u of report.unmatched; track u.songId) {
+              <span class="chipgap">{{ u.title }}</span>
+            }
+          </p>
+        }
+      </div>
+    }
+  </section>
+
   <ol class="tracks">
     @for (item of items(); track item.id) {
       <li>
@@ -124,6 +167,18 @@
         <span class="a">{{ artistCredit(item.song) }}</span>
         <span class="al">{{ item.song.album_title ?? '' }}</span>
         <span class="d">{{ durationText(item.song.duration_s) }}</span>
+        <span class="ytlink">
+          @if (item.song.yt_video_id) {
+            <a
+              [href]="'https://music.youtube.com/watch?v=' + item.song.yt_video_id"
+              target="_blank"
+              rel="noopener"
+              >yt</a
+            >
+          } @else {
+            <button class="linky" [disabled]="busy()" (click)="matchOne(item.song.id)">find</button>
+          }
+        </span>
         <span class="by" [title]="'added by ' + item.added_by_username">+{{ item.added_by_username }}</span>
         @if (p.can_edit) {
           <button class="x" (click)="remove(item.id)" [attr.aria-label]="'Remove ' + item.song.title">×</button>

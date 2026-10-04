@@ -26,7 +26,7 @@ describe('npm run logs', () => {
   // -t finds an empty directory and the assertions fail for a reason that has nothing to do with
   // the code under test.
   beforeAll(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'yaum-tail-'));
+    dir = await mkdtemp(join(tmpdir(), 'plst-tail-'));
     // Deliberately interleaved, and error.log holds BOTH the oldest and the newest entry — which is
     // what made file-by-file printing look scrambled.
     await writeFile(
@@ -82,7 +82,7 @@ describe('npm run logs', () => {
   });
 
   it('--ext explains that extension logs appear when the popup uploads', async () => {
-    const extDir = await mkdtemp(join(tmpdir(), 'yaum-tail-ext-'));
+    const extDir = await mkdtemp(join(tmpdir(), 'plst-tail-ext-'));
     try {
       const { stdout } = await run('node', [SCRIPT, '--dir', extDir, '--ext', '--no-follow']);
       expect(stdout).toMatch(/no extension logs yet/);
@@ -94,7 +94,7 @@ describe('npm run logs', () => {
   });
 
   it('--ext reads ext.log only', async () => {
-    const extDir = await mkdtemp(join(tmpdir(), 'yaum-tail-ext2-'));
+    const extDir = await mkdtemp(join(tmpdir(), 'plst-tail-ext2-'));
     try {
       await writeFile(
         join(extDir, 'ext.log'),
@@ -110,7 +110,7 @@ describe('npm run logs', () => {
   });
 
   it('tells a missing app.log apart from a server that never logged', async () => {
-    const emptyDir = await mkdtemp(join(tmpdir(), 'yaum-tail-empty-'));
+    const emptyDir = await mkdtemp(join(tmpdir(), 'plst-tail-empty-'));
     try {
       const { stdout } = await run('node', [SCRIPT, '--dir', emptyDir, '--no-follow']);
       expect(stdout).toMatch(/no log files in/);

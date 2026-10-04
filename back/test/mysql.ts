@@ -4,7 +4,7 @@ import { initLibrary } from '../src/library/schema.js';
 import { LibraryStore } from '../src/library/store.js';
 
 export async function makeStore(): Promise<Store> {
-  const testDb = `mush_test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const testDb = `plst_test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const conn = await mysql.createConnection({
     host: '127.0.0.1',
     port: 3306,
@@ -31,7 +31,7 @@ export async function makeStore(): Promise<Store> {
 const libraryDbs: string[] = [];
 
 export async function makeLibrary(): Promise<LibraryStore> {
-  const testDb = `yaum_lib_test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const testDb = `plst_lib_test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const conn = await mysql.createConnection({
     host: '127.0.0.1',
     port: 3306,

@@ -91,6 +91,42 @@ export interface Collaborator {
   shared_at: number;
 }
 
+/** POST /songs/:id/match and POST /playlists/:id/match — mirrors MatchResult in back/src/model.ts. */
+export interface MatchResultDto {
+  songId?: number;
+  status: 'matched' | 'uncertain' | 'not_found' | 'skipped_dup';
+  score: number;
+  videoId: string | null;
+  ytTitle?: string | null;
+  ytArtist?: string | null;
+  ytDuration?: number | null;
+  title?: string;
+  cached?: boolean;
+  error?: string | null;
+}
+
+export interface ExportLink {
+  songId: number;
+  title: string;
+  artists: string[];
+  videoId: string;
+  url: string;
+}
+
+export interface ExportUncertain extends ExportLink {}
+
+export interface YoutubeExport {
+  /** Confident matches only — these are the lines meant to be pasted. */
+  links: ExportLink[];
+  matched: number;
+  /** Matched but not trusted (score below the accept threshold): listed, never linked. */
+  uncertain: ExportUncertain[];
+  unmatched: { songId: number; title: string; artists: string[] }[];
+  total: number;
+  /** Ready to paste: the confident links, then comment blocks for the rest. */
+  text: string;
+}
+
 export type NotificationType = 'import_ready' | 'playlist_shared' | 'playlist_edited' | 'collab_removed' | 'playlist_renamed';
 
 export interface AppNotification {

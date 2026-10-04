@@ -6,11 +6,13 @@ import { Injectable, computed, effect, signal } from '@angular/core';
  * this service with a real session is the only change real auth needs on this side — every page
  * reads user() and never touches the header itself.
  */
-const STORAGE_KEY = 'yaum.userId';
+const STORAGE_KEY = 'plst.userId';
+// The key was renamed with the app; read the old one so an existing browser keeps its user.
+const LEGACY_KEY = 'yaum.userId';
 const DEFAULT_USER_ID = 1;
 
 function readStored(): number {
-  const raw = localStorage.getItem(STORAGE_KEY);
+  const raw = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_KEY);
   const n = Number(raw);
   return Number.isInteger(n) && n > 0 ? n : DEFAULT_USER_ID;
 }

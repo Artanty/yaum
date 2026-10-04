@@ -6,7 +6,7 @@ import { LibraryApi } from '../../core/library-api';
 import { Session } from '../../core/session';
 import { errorText } from '../../core/interceptor';
 import { artistCredit, durationText, timeAgo } from '../../core/format';
-import type { Collaborator, PlaylistDetail, Song } from '../../core/models';
+import type { Collaborator, PlaylistDetail, Song, YoutubeExport } from '../../core/models';
 
 @Component({
   selector: 'app-playlist-detail',
@@ -205,5 +205,80 @@ export class PlaylistDetailPage {
         this.message.set(errorText(err));
       },
     });
+  }
+
+  // ------------------------------------------------------- youtube links
+
+  protected readonly export = signal<YoutubeExport | null>(null);
+  protected readonly matchingAll = signal(false);
+
+  protected readonly matchedCount = computed(() => this.items().filter((i) => i.song.yt_video_id).length);
+
+  protected matchOne(songId: number): void {
+    if (this.busy() || this.matchingAll()) return;
+    this.busy.set(true);
+    this.message.set(null);
+    this.api.matchSong(songId).subscribe({
+      next: (res) => {
+        this.busy.set(false);
+        this.api.refresh();
+        this.message.set(
+          res.status === 'not_found' ? `No YouTube Music match for “${res.title ?? 'this song'}”.` : `✓ matched (${Math.round(res.score * 100)}%)`,
+        );
+      },
+      error: (err) => {
+        this.busy.set(false);
+        this.message.set(errorText(err));
+      },
+    });
+  }
+
+  protected matchAll(): void {
+    if (this.busy() || this.matchingAll()) return;
+    this.matchingAll.set(true);
+    this.busy.set(true);
+    this.message.set('matching… this is one YouTube search per song, so it takes a moment');
+    this.api.matchPlaylist(this.id()).subscribe({
+      next: (res) => {
+        this.matchingAll.set(false);
+        this.busy.set(false);
+        this.api.refresh();
+        this.message.set(`✓ ${res.matched} of ${res.total} songs matched`);
+      },
+      error: (err) => {
+        this.matchingAll.set(false);
+        this.busy.set(false);
+        this.message.set(errorText(err));
+      },
+    });
+  }
+
+  protected exportLinks(): void {
+    if (this.busy()) return;
+    this.busy.set(true);
+    this.message.set(null);
+    this.api.exportYoutube({ playlistId: this.id() }).subscribe({
+      next: (report) => {
+        this.busy.set(false);
+        this.export.set(report);
+      },
+      error: (err) => {
+        this.busy.set(false);
+        this.message.set(errorText(err));
+      },
+    });
+  }
+
+  protected dismissExport(): void {
+    this.export.set(null);
+  }
+
+  protected async copyExport(report: YoutubeExport): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(report.text);
+      this.message.set(`✓ copied ${report.matched} link(s)`);
+    } catch (err) {
+      this.message.set(`could not use the clipboard (${(err as Error)?.name ?? 'unknown'}) — select the text instead`);
+    }
   }
 }

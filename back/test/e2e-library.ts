@@ -11,7 +11,7 @@ import { Store } from '../src/db.js';
 // Why not vitest: it needs a real listening socket (to prove CORS and the actual wire format the
 // extension posts), and a fixed port, which does not belong in the unit suite.
 
-const DB = `yaum_e2e_${Date.now()}`;
+const DB = `plst_e2e_${Date.now()}`;
 
 async function main() {
   const conn = await mysql.createConnection({ host: '127.0.0.1', port: 3306, user: 'root', password: '' });
@@ -22,11 +22,11 @@ async function main() {
   const library = new LibraryStore(pool);
   await library.seedUsers();
 
-  const mushPool = buildPool();
-  const mushStore = new Store(mushPool);
-  await mushStore.init();
+  const plstPool = buildPool();
+  const plstStore = new Store(plstPool);
+  await plstStore.init();
 
-  const app = buildApp(mushStore, library);
+  const app = buildApp(plstStore, library);
   const port = 8123;
   await app.listen({ host: '127.0.0.1', port });
   const base = `http://127.0.0.1:${port}/api/library`;
@@ -92,7 +92,7 @@ async function main() {
   check('collaborator with canEdit may add tracks', added.status === 200, JSON.stringify(added.json));
   const ownerNotifs = await call('GET', '/notifications', undefined, 1);
   check('owner was notified of the collaborator edit', (ownerNotifs.json as { notifications: { type: string }[] }).notifications.some((n) => n.type === 'playlist_edited'), JSON.stringify(ownerNotifs.json));
-  check('actor did NOT notify themselves', (ownerNotifs.json as { notifications: unknown[] }).notifications.every((n) => (n as { actor_username: string }).actor_username === 'friend'));
+  check('actor did NOT notify themselves', (ownerNotifs.json as { notifications: unknown[] }).notifications.every((n) => (n as { actor_username: string }).actor_username === 'zaur'));
 
   // 6. view-only cannot edit
   await call('POST', `/playlists/${playlistId}/share`, { userId: 2, canEdit: false }, 1);
@@ -125,7 +125,7 @@ async function main() {
   // to a schema). Dropping twice — once via pool, once via conn — is the mistake this replaced.
   await conn.query(`DROP DATABASE IF EXISTS \`${DB}\``);
   await pool.end();
-  await mushPool.end();
+  await plstPool.end();
   await conn.end();
   console.log(process.exitCode ? '\nSOME CHECKS FAILED' : '\nALL CHECKS PASSED');
 }

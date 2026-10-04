@@ -24,19 +24,27 @@
   const BACKOFF_MS = [5_000, 15_000, 60_000, 300_000];
   const TIMEOUT_MS = 4_000;
 
+  // The app was renamed mush/yaum -> plst, which included the storage keys. Read the new key
+  // first, then the old one, so a browser that saved settings under the previous names keeps its
+  // backend URL and user id instead of silently reverting to the defaults.
+  const LEGACY_KEYS = { "plst.server": "mush.server", "plst.userId": "yaum.userId" };
   const readLocal = (key, dflt = null) => {
+    let legacy = null;
     try {
-      return globalThis.localStorage?.getItem(key) ?? dflt;
+      const hit = globalThis.localStorage?.getItem(key);
+      if (hit !== null && hit !== undefined) return hit;
+      legacy = globalThis.localStorage?.getItem(LEGACY_KEYS[key] ?? "") ?? null;
     } catch {
       return dflt; // opaque origin: localStorage throws
     }
+    return legacy ?? dflt;
   };
 
   // Same defaults as popup.js. Read from storage rather than from the popup's inputs, because this
   // also runs on pagehide when the inputs may already be gone.
-  const server = () => (readLocal("mush.server", "") || "http://127.0.0.1:8000").replace(/\/+$/, "");
+  const server = () => (readLocal("plst.server", "") || "http://127.0.0.1:8000").replace(/\/+$/, "");
   const userId = () => {
-    const raw = readLocal("yaum.userId", "");
+    const raw = readLocal("plst.userId", "");
     const n = Number(raw);
     return Number.isInteger(n) && n > 0 ? n : null;
   };
@@ -78,7 +86,7 @@
   async function drain() {
     let total = 0;
     for (;;) {
-      const pending = globalThis.yaumLog?.pending?.() ?? [];
+      const pending = globalThis.plstLog?.pending?.() ?? [];
       if (!pending.length) {
         return total
           ? setStatus({ state: "ok", sent: total, error: null, attempts: 0 })
@@ -105,7 +113,7 @@
         const body = await res.json().catch(() => ({}));
         stored = typeof body.stored === "number" ? body.stored : batch.length;
         // Only now are they really delivered: an entry marked shipped on a failed request is gone.
-        globalThis.yaumLog.markShipped(batch);
+        globalThis.plstLog.markShipped(batch);
         total += stored;
         attempts = 0;
       } catch (err) {
@@ -114,7 +122,7 @@
         const done = attempts >= MAX_ATTEMPTS;
         // debug, not warn: a warn here becomes an entry that must itself be shipped, which is how a
         // logging feature turns into the noise it was added to prevent. The popup shows the state.
-        globalThis.yaumLog?.debug?.(
+        globalThis.plstLog?.debug?.(
           "ship",
           done ? `giving up after ${attempts} attempts` : "retrying later",
           { attempt: attempts, retryInMs: wait, error: String(err?.message ?? err) }
@@ -153,7 +161,7 @@
     return inFlight;
   }
 
-  globalThis.yaumShip = {
+  globalThis.plstShip = {
     ENDPOINT,
     /** Ship now (no-op if a request is already running). `force` ignores a spent backoff. */
     ship,

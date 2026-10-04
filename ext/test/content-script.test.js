@@ -113,7 +113,7 @@ test("a scan leaves a trace explaining what it saw", async ({ page }) => {
 
   const entries = await page.evaluate(async () => {
     await window.__scan();
-    return yaumLog.entries();
+    return plstLog.entries();
   });
 
   const start = entries.find((e) => e.msg === "SCAN received");
@@ -136,7 +136,7 @@ test("a zero-track scan is logged as a warning with the row count", async ({ pag
 
   const entries = await page.evaluate(async () => {
     await window.__scan();
-    return yaumLog.entries();
+    return plstLog.entries();
   });
 
   const warn = entries.find((e) => e.level === "warn" && /collected 0 tracks/.test(e.msg));

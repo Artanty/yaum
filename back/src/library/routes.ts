@@ -7,12 +7,21 @@ import {
   readExtLogs,
 } from '../lib/ext-log.js';
 import { NULL_GENRE_PROVIDER } from './genre.js';
+import { defaultMatchDeps, matchSong, matchSongs, type MatchDeps } from './match.js';
 import type { LibraryStore } from './store.js';
+import { buildYoutubeExport } from './youtube.js';
 import type { PlaylistRow, SongRow, SongView } from './types.js';
 
 export const LIBRARY_PREFIX = '/api/library';
 
 const MAX_PAGE = 500;
+
+/**
+ * A playlist match fans out into one YouTube search per song. Capped per request: the whole point of
+ * the cap is that a slow or blocked YouTube cannot turn one click into an unbounded pile of
+ * half-finished searches.
+ */
+const MAX_PLAYLIST_MATCH = 50;
 
 /**
  * Decorated onto the app by buildApp. Declared here as well so the library routes can read the
@@ -159,7 +168,16 @@ async function toSongViews(store: LibraryStore, songs: SongRow[]): Promise<SongV
   });
 }
 
-export function registerLibraryRoutes(app: FastifyInstance, store: LibraryStore): void {
+/**
+ * `matchDeps` is injected rather than imported so the YouTube search can be faked in tests: this
+ * machine cannot reach YouTube at all (connections silently drop — see back/AGENTS.md), so a route
+ * test that used the real client would hang until the timeout instead of testing anything.
+ */
+export function registerLibraryRoutes(
+  app: FastifyInstance,
+  store: LibraryStore,
+  matchDeps: MatchDeps = defaultMatchDeps,
+): void {
   const viewer = requireViewer(store);
   const wrap =
     (fn: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>) =>
@@ -425,6 +443,101 @@ export function registerLibraryRoutes(app: FastifyInstance, store: LibraryStore)
     return { song: view };
   }));
 
+  // -------------------------------------------------------- youtube links
+  //
+  // A song is a global fact, so matching one needs no ownership check — the same reasoning as
+  // GET /songs/:id. Reading a playlist's links does need access to that playlist.
+
+  /** Run the existing matcher over one song and store the verdict, so the export can find it later. */
+  app.post(`${LIBRARY_PREFIX}/songs/:id/match`, wrap(async (request) => {
+    await viewer(request);
+    const id = intParam((request.params as { id: string }).id, 'id');
+    const [song] = await store.matchableSongs([id]);
+    if (!song) throw new HttpError(404, 'song not found');
+
+    const res = await matchSong(song, matchDeps);
+    // not_found is stored too: it records that we tried, so a later export can say "no match"
+    // without the user wondering whether matching ever ran.
+    await store.setSongMatch(song.id, res.videoId ?? null, res.score);
+    logger.log(
+      'library: song matched',
+      {
+        songId: song.id,
+        title: song.title,
+        status: res.status,
+        score: Number(res.score.toFixed(3)),
+        videoId: res.videoId ?? null,
+      },
+      'matchSong',
+    );
+    return { songId: song.id, ...res };
+  }));
+
+  /** Match every song in a playlist. Capped so one request cannot fan out into an unbounded search. */
+  app.post(`${LIBRARY_PREFIX}/playlists/:id/match`, wrap(async (request) => {
+    const me = await viewer(request);
+    const id = intParam((request.params as { id: string }).id, 'id');
+    const playlist = await mustGetPlaylist(store, id);
+    await assertCanView(store, playlist, me.id);
+
+    const songs = await store.playlistSongsForLinks(id);
+    if (songs.length > MAX_PLAYLIST_MATCH) {
+      throw new HttpError(400, `playlist has ${songs.length} songs; match at most ${MAX_PLAYLIST_MATCH} per request`);
+    }
+    const results = await matchSongs(songs, matchDeps);
+    for (const r of results) await store.setSongMatch(r.songId, r.videoId ?? null, r.score);
+
+    const matched = results.filter((r) => r.status === 'matched' || r.status === 'uncertain').length;
+    logger.log('library: playlist matched', { playlistId: id, user: me.username, songs: results.length, matched }, 'matchPlaylist');
+    return { playlistId: id, total: results.length, matched, results };
+  }));
+
+  /**
+   * The export itself: matched songs as `https://music.youtube.com/watch?v=<videoId>` lines, plus an
+   * explicit list of the songs that have no match yet. Unmatched songs are never silently dropped.
+   */
+  app.get(`${LIBRARY_PREFIX}/export/youtube`, wrap(async (request, reply) => {
+    const me = await viewer(request);
+    const query = request.query as { playlistId?: string; songIds?: string; format?: string };
+
+    let songs;
+    if (query.playlistId !== undefined && query.playlistId !== '') {
+      const id = intParam(query.playlistId, 'playlistId');
+      const playlist = await mustGetPlaylist(store, id);
+      await assertCanView(store, playlist, me.id);
+      songs = await store.playlistSongsForLinks(id);
+    } else if (query.songIds) {
+      const ids = query.songIds
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean)
+        .map((v) => intParam(v, 'songIds'));
+      if (!ids.length) throw new HttpError(400, 'pass playlistId or songIds');
+      songs = await store.matchableSongs(ids);
+    } else {
+      throw new HttpError(400, 'pass playlistId or songIds');
+    }
+
+    const report = buildYoutubeExport(songs);
+    logger.log(
+      'library: youtube export',
+      {
+        user: me.username,
+        playlistId: query.playlistId ?? null,
+        songs: report.total,
+        matched: report.matched,
+        unmatched: report.unmatched.length,
+      },
+      'exportYoutube',
+    );
+
+    if (query.format === 'text') {
+      reply.header('content-type', 'text/plain; charset=utf-8');
+      return reply.send(report.text.endsWith('\n') ? report.text : report.text + '\n');
+    }
+    return report;
+  }));
+
   app.get(`${LIBRARY_PREFIX}/artists`, wrap(async (request) => {
     await viewer(request);
     return { artists: await store.listArtists() };
@@ -453,12 +566,24 @@ export function registerLibraryRoutes(app: FastifyInstance, store: LibraryStore)
 
   app.post(`${LIBRARY_PREFIX}/playlists`, wrap(async (request) => {
     const me = await viewer(request);
-    const body = (request.body ?? {}) as { name?: unknown; description?: unknown };
+    const body = (request.body ?? {}) as { name?: unknown; description?: unknown; songIds?: unknown };
     const name = String(body.name ?? '').trim();
     if (!name) throw new HttpError(400, 'name is required');
-    const id = await store.createPlaylist(me.id, name, String(body.description ?? '').trim() || null);
-    logger.log('library: playlist created', { playlistId: id, user: me.username, name });
-    return { playlistId: id };
+    const description = String(body.description ?? '').trim() || null;
+
+    // songIds is how the library page builds a playlist out of the current selection. Validated the
+    // same way POST /playlists/:id/items does, so an unknown id is a 400 naming the id rather than
+    // a playlist that mysteriously comes out short.
+    const songIds = Array.isArray(body.songIds) ? (body.songIds as unknown[]).map((v) => intParam(v, 'songIds[]')) : [];
+    if (songIds.length) {
+      const exist = await store.existingSongIds(songIds);
+      const missing = songIds.filter((s) => !exist.has(s));
+      if (missing.length) throw new HttpError(400, `unknown song id(s): ${missing.join(', ')}`);
+    }
+
+    const { playlistId, added } = await store.createPlaylistWithSongs(me.id, name, description, songIds);
+    logger.log('library: playlist created', { playlistId, user: me.username, name, added }, 'createPlaylist');
+    return { playlistId, added };
   }));
 
   app.get(`${LIBRARY_PREFIX}/playlists/:id`, wrap(async (request) => {

@@ -15,15 +15,15 @@ import type { FastifyInstance } from 'fastify';
 import type { LibraryStore } from '../src/library/store.js';
 
 const prevLogDir = process.env.LOG_DIR;
-const logDir = await mkdtemp(join(tmpdir(), 'yaum-extlog-'));
+const logDir = await mkdtemp(join(tmpdir(), 'plst-extlog-'));
 process.env.LOG_DIR = logDir;
 
 // Values, so: loaded now, after LOG_DIR is in place.
 const { registerLibraryRoutes } = await import('../src/library/routes.js');
 
 const stubStore = {
-  listUsers: async () => [{ id: 1, username: 'artyom', display_name: 'Artiom' }],
-  getUser: async (id: number) => (id === 1 ? { id: 1, username: 'artyom', display_name: 'Artiom' } : null),
+  listUsers: async () => [{ id: 1, username: 'artyom', display_name: 'Artyom' }],
+  getUser: async (id: number) => (id === 1 ? { id: 1, username: 'artyom', display_name: 'Artyom' } : null),
 } as unknown as LibraryStore;
 
 const LIB = '/api/library';
