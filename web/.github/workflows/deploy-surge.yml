@@ -37,6 +37,8 @@ jobs:
       - name: Deploy to Surge
         env:
           SURGE_TOKEN: ${{ secrets.SURGE_TOKEN }}
+          SERVICE_EMAIL: ${{ secrets.SERVICE_EMAIL }}
+          SERVICE_PASSWORD: ${{ secrets.SERVICE_PASSWORD }}
         run: |
           if [ -f .env ]; then
             SURGE_DOMAIN=$(grep -E '^SURGE_DOMAIN=' .env | cut -d '=' -f2 | tr -d ' \n\r')
@@ -44,9 +46,21 @@ jobs:
             SURGE_DOMAIN=""
           fi
 
+          if [ -n "$SERVICE_EMAIL" ] && [ -n "$SERVICE_PASSWORD" ]; then
+            printf "%s\n%s\n" "$SERVICE_EMAIL" "$SERVICE_PASSWORD" | surge login 2>&1 | tail -1
+          elif [ -n "$SURGE_TOKEN" ]; then
+            surge whoami --token "$SURGE_TOKEN" 2>&1 | tail -1
+          fi
+
           if [ -z "$SURGE_DOMAIN" ]; then
-            echo "No SURGE_DOMAIN found. First deploy - letting Surge generate domain..."
-            surge ./dist/app/browser --token "$SURGE_TOKEN" 2>&1 | tee surge_output.txt
+            echo "No SURGE_DOMAIN found. First deploy..."
+            if [ -n "$SERVICE_EMAIL" ] && [ -n "$SERVICE_PASSWORD" ]; then
+              printf "%s\n%s\n" "$SERVICE_EMAIL" "$SERVICE_PASSWORD" | surge ./dist/app/browser publish 2>&1 | tee surge_output.txt
+            elif [ -n "$SURGE_TOKEN" ]; then
+              surge ./dist/app/browser publish --token "$SURGE_TOKEN" 2>&1 | tee surge_output.txt
+            else
+              surge ./dist/app/browser publish 2>&1 | tee surge_output.txt
+            fi
             DEPLOY_URL=$(grep -oE 'https?://[a-zA-Z0-9.-]+\.surge\.sh' surge_output.txt | tail -1)
             if [ -n "$DEPLOY_URL" ]; then
               DOMAIN=$(echo "$DEPLOY_URL" | sed 's|^https\?://||')
@@ -54,7 +68,13 @@ jobs:
               echo "domain=$DOMAIN" >> $GITHUB_ENV
             fi
           else
-            surge ./dist/app/browser "$SURGE_DOMAIN" --token "$SURGE_TOKEN"
+            if [ -n "$SERVICE_EMAIL" ] && [ -n "$SERVICE_PASSWORD" ]; then
+              printf "%s\n%s\n" "$SERVICE_EMAIL" "$SERVICE_PASSWORD" | surge ./dist/app/browser "$SURGE_DOMAIN" 2>&1 | tee surge_output.txt
+            elif [ -n "$SURGE_TOKEN" ]; then
+              surge ./dist/app/browser "$SURGE_DOMAIN" --token "$SURGE_TOKEN" 2>&1 | tee surge_output.txt
+            else
+              surge ./dist/app/browser "$SURGE_DOMAIN" 2>&1 | tee surge_output.txt
+            fi
           fi
 
       - name: Commit and push updated .env with domain
@@ -72,8 +92,16 @@ jobs:
         if: env.domain != ''
         env:
           SURGE_TOKEN: ${{ secrets.SURGE_TOKEN }}
+          SERVICE_EMAIL: ${{ secrets.SERVICE_EMAIL }}
+          SERVICE_PASSWORD: ${{ secrets.SERVICE_PASSWORD }}
         run: |
           SURGE_DOMAIN=$(grep -E '^SURGE_DOMAIN=' .env | cut -d '=' -f2 | tr -d ' \n\r')
           if [ -n "$SURGE_DOMAIN" ]; then
-            surge ./dist/app/browser "$SURGE_DOMAIN" --token "$SURGE_TOKEN"
+            if [ -n "$SERVICE_EMAIL" ] && [ -n "$SERVICE_PASSWORD" ]; then
+              printf "%s\n%s\n" "$SERVICE_EMAIL" "$SERVICE_PASSWORD" | surge ./dist/app/browser "$SURGE_DOMAIN"
+            elif [ -n "$SURGE_TOKEN" ]; then
+              surge ./dist/app/browser "$SURGE_DOMAIN" --token "$SURGE_TOKEN"
+            else
+              surge ./dist/app/browser "$SURGE_DOMAIN"
+            fi
           fi
