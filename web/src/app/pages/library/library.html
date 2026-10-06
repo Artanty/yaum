@@ -129,13 +129,13 @@
         type="text"
         placeholder="new playlist name…"
         [ngModel]="playlistName()"
-        (ngModelChange)="playlistName = $event"
+        (ngModelChange)="playlistName.set($event)"
         aria-label="Name for the new playlist"
       />
       <button [disabled]="busy() || !playlistName().trim()" (click)="createPlaylist()">create playlist</button>
       <select
         [ngModel]="targetPlaylist()"
-        (ngModelChange)="targetPlaylist = $event"
+        (ngModelChange)="targetPlaylist.set($event)"
         aria-label="Add the selection to an existing playlist"
       >
         <option [ngValue]="''">add to…</option>

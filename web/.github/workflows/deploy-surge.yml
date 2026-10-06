@@ -1,0 +1,79 @@
+name: Deploy Web to Surge
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Build and Deploy Angular App to Surge
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Angular app
+        run: npm run build -- --configuration production
+
+      - name: Install Surge
+        run: npm install -g surge
+
+      - name: Prepare SPA fallback
+        run: cp dist/app/browser/index.html dist/app/browser/200.html
+
+      - name: Deploy to Surge
+        env:
+          SURGE_TOKEN: ${{ secrets.SURGE_TOKEN }}
+        run: |
+          if [ -f .env ]; then
+            SURGE_DOMAIN=$(grep -E '^SURGE_DOMAIN=' .env | cut -d '=' -f2 | tr -d ' \n\r')
+          else
+            SURGE_DOMAIN=""
+          fi
+
+          if [ -z "$SURGE_DOMAIN" ]; then
+            echo "No SURGE_DOMAIN found. First deploy - letting Surge generate domain..."
+            surge ./dist/app/browser --token "$SURGE_TOKEN" 2>&1 | tee surge_output.txt
+            DEPLOY_URL=$(grep -oE 'https?://[a-zA-Z0-9.-]+\.surge\.sh' surge_output.txt | tail -1)
+            if [ -n "$DEPLOY_URL" ]; then
+              DOMAIN=$(echo "$DEPLOY_URL" | sed 's|^https\?://||')
+              echo "SURGE_DOMAIN=$DOMAIN" >> .env
+              echo "domain=$DOMAIN" >> $GITHUB_ENV
+            fi
+          else
+            surge ./dist/app/browser "$SURGE_DOMAIN" --token "$SURGE_TOKEN"
+          fi
+
+      - name: Commit and push updated .env with domain
+        if: env.domain != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .env
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: set SURGE_DOMAIN from first deploy [skip ci]"
+            git push
+          fi
+
+      - name: Deploy again with saved domain
+        if: env.domain != ''
+        env:
+          SURGE_TOKEN: ${{ secrets.SURGE_TOKEN }}
+        run: |
+          SURGE_DOMAIN=$(grep -E '^SURGE_DOMAIN=' .env | cut -d '=' -f2 | tr -d ' \n\r')
+          if [ -n "$SURGE_DOMAIN" ]; then
+            surge ./dist/app/browser "$SURGE_DOMAIN" --token "$SURGE_TOKEN"
+          fi
