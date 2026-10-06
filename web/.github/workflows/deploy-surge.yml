@@ -2,7 +2,7 @@ name: Deploy Web to Surge
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     paths:
       - '**'
 
