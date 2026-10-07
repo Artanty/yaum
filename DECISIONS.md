@@ -141,3 +141,125 @@ create-from-selection preserves order and rejects unknown ids with a 400 naming 
 unmatched songs instead of dropping them; a real match stores the video id.
 
 `back` 86 tests (11 files), `ext` 27, `web` 25; `tsc` clean in both TS projects. Nothing committed.
+
+## 2026-10-07 — PLAN (rule 1): make the Surge deploy workflow answer surge's interactive prompts
+
+### Symptom
+
+Log ends at:
+
+```
+No SURGE_DOMAIN found. First deploy...
+   Welcome to surge! (surge.sh)
+   Login or create surge account by entering email & password.
+email:
+```
+
+The job hangs there (GitHub eventually kills it at 6h) — surge wants a human.
+
+### What the code and the surge CLI actually say (checked first)
+
+1. **Where the workflow lives.** The only workflow in this repo is
+   `web/.github/workflows/deploy-surge.yml`. GitHub only runs workflows from the *root*
+   `.github/workflows`, so this file runs in the "slave" repo that receives `web/` at its root —
+   not in `Artanty/yaum`. Consequence: secrets (`SERVICE_EMAIL`, `SERVICE_PASSWORD`,
+   `SURGE_TOKEN`) and any repo variable must exist **there**, and `web/.env` (which carries a real
+   email locally) is gitignored here, so it never reaches CI — `.env` in CI is created by the
+   workflow itself on the first deploy.
+2. **Why the pipe never worked.** `web/.github/workflows/deploy-surge.yml:50,58,72` feed surge's
+   stdin with `printf "%s\n%s\n" | surge ...`. Surge's prompts come from the `read` package
+   (`read@1.0.5`): a prompt is only interactive when `opts.terminal || output.isTTY`, and under
+   Actions stdout is a pipe, so the login form does not consume the piped lines — it sits on
+   `email:` forever. This is not fixable by piping; it needs a pty. Hence `expect`.
+3. **There are up to three prompts, not two.** Reading the surge 0.44.5 source (`npm pack surge`):
+   - auth (`lib/middleware/_shared/auth.js` → `helpers.loginForm`) asks `email:` then `password:`
+     (password with `silent: true`, so it is **not** echoed — and GitHub masks secrets anyway);
+   - a wrong password reprompts 3× and then asks `forgot?` with default `yes` — answering that
+     with the default *triggers a password-reset email*, so expect must answer `no`;
+   - `surge <path> publish` with no domain reaches `discovery.resolve({prompt:true})` and asks a
+     **third** prompt, `domain:` (suggestion is the project dir name, i.e. `browser.surge.sh`).
+     Fixing only login would just move the hang from `email:` to `domain:`.
+4. **The URL grep in the workflow can never match.** `deploy.js` prints
+   `Success! - Published to <domain>` and the recap prints `domain: <domain>` — **no `https://…`
+   line anywhere**, so `grep -oE 'https?://…\.surge\.sh'` (line 64) always returns empty and
+   `.env` would never be written even after a successful deploy.
+5. **`surge login` does the right thing non-interactively-ish**: `browserLogin` no-ops without
+   `--browser`, then `auth` prompts (driven by expect) and `localCreds().set()` writes `~/.surgerc`,
+   after which later publishes do not prompt for credentials at all.
+6. **A domain given as an argument skips the prompt entirely** — `_shorthand.js` maps
+   `argv._[1]` to `req.domain`, and `discovery.resolve` then uses it as `source: "arg"`.
+
+### Decisions
+
+- **Drive surge through `expect`** (a pty), with one small driver script written into
+  `$RUNNER_TEMP/surge.exp`: it spawns whatever surge command it is given, answers `email:` /
+  `password:` from `SERVICE_EMAIL` / `SERVICE_PASSWORD`, answers `forgot?` with `no`, answers a
+  stray `domain:` prompt by accepting the suggestion, gives up loudly after 600s or 3 attempts
+  (instead of hanging for 6 hours), and **propagates surge's exit status** so a failed login fails
+  the job.
+- **Pick the domain in the workflow, before deploying**, so it is known without parsing surge's
+  output: `vars.SURGE_DEPLOY_DOMAIN` if the user set a repo variable, otherwise
+  `<repo-slug>-<4 hex>.surge.sh` (entropy because surge's own source says bare names are taken).
+  This removes the third prompt, the URL grep, and the whole "deploy again with saved domain" step.
+- **Write `.env` with an upsert** (sed replace / append / create), never blind `>>` — the old
+  append would produce two `SURGE_DOMAIN=` lines after a second first-deploy and the next run
+  would read the empty one.
+- **Add `permissions: contents: write`** so the `.env` commit step can push with `GITHUB_TOKEN`
+  on a read-only-by-default repo; use `git add -f .env` so an ignore rule cannot fail the step.
+- Keep `SURGE_TOKEN` working: surge reads `SURGE_TOKEN` from the environment itself
+  (`_creds.js:8`), so the explicit `--token` plumbing goes away.
+
+### Work
+
+1. Rewrite `web/.github/workflows/deploy-surge.yml`: install `expect` (only if missing), write the
+   expect driver + a `surge-run` wrapper, login step through expect, deploy step that resolves the
+   domain first and then runs `surge ./dist/app/browser <domain>` through expect, commit `.env`.
+2. Test the expect driver **locally** against a mock program that prints the same prompts (email,
+   password, domain, `forgot?`) — verify answers are sent, exit codes propagate, and the
+   "SERVICE_EMAIL is empty" path fails fast.
+3. YAML-lint the workflow, then write the RESULT below.
+
+### RESULT — workflow rewritten, driver tested against mocks and the real surge CLI
+
+`web/.github/workflows/deploy-surge.yml` now: installs `expect` (only if missing), writes
+`$RUNNER_TEMP/surge.exp` + a `surge-run` wrapper into `$RUNNER_TEMP`, logs in through the driver,
+resolves the domain **before** deploying, runs `surge ./dist/app/browser <domain>` through the
+driver, upserts `.env`, and commits it. The URL grep, the `printf | surge` pipes, and the whole
+"Deploy again with saved domain" step are gone. Added `permissions: contents: write` (the `.env`
+push needs it on a read-only-by-default token) and `git add -f .env`.
+
+**Two bugs the tests caught before anything was pushed:**
+
+- `puts "\n[surge.exp] …"` — in Tcl `[...]` is *command substitution*, so the driver died with
+  `invalid command name "surge.exp"` the moment it answered the first prompt. Messages are now
+  `surge.exp: …`.
+- `run: "$RUNNER_TEMP/surge-run" login` is invalid YAML (a quoted scalar followed by more text).
+  The first `yaml.safe_load` failed on it; now single-quoted as a whole.
+
+**Verified locally:**
+
+- Mock prompts: answers email/password/domain, exit 0; missing `SERVICE_EMAIL` → exit 1 naming the
+  secret; three wrong passwords → `forgot?` answered `no` (ctrl-u clears surge's pre-filled `yes`)
+  → mock's exit 3 propagated; a prompt-less command → exit 42 propagated. The `domain:` branch
+  also ignores surge's second `domain:` line (the recap), so it never double-sends.
+- **Real surge 0.44.5** (`npx -y surge@0.44.5 login`, no credentials set): driver matched the real
+  ANSI-padded prompt (`\x1b[90m          email:\x1b[39m`), sent the email, surge advanced to
+  `password:`, and the driver exited 1 naming `SERVICE_PASSWORD` — no account was created, no API
+  call was made, no hang.
+- Surge source confirms `<path> <domain>` sets `req.domain` via `_shorthand.js` and
+  `discovery.resolve` then takes `source: "arg"` — so **the domain prompt never happens**; the
+  `domain:` branch in the driver is only a fallback. `validDomain('yaum-web-56d2.surge.sh')` → true.
+- Deploy step exercised with a fake `surge` on PATH: no `.env` → claims
+  `<repo-slug>-<4hex>.surge.sh`; `.env` with `SURGE_DOMAIN=` plus another key → line replaced in
+  place (no duplicate, other key kept); existing domain → reused silently; `SURGE_DEPLOY_DOMAIN`
+  → honoured.
+
+**Not verifiable from this machine:** the real credential exchange (needs the secrets). Note the
+secrets must live in the repo **where this workflow runs** — a slave repo that receives `web/` at
+its root, since GitHub ignores `web/.github/workflows` inside `Artanty/yaum`. If the log shows
+`surge.exp: surge asked for an email but SERVICE_EMAIL is empty`, that is the cause: the secret is
+missing *there*.
+
+Optional: set the repository **variable** `SURGE_DEPLOY_DOMAIN` (e.g. `plst.surge.sh`) to control
+the first-deploy domain; without it the job claims `<repo-slug>-<4hex>.surge.sh`, which is stable
+afterwards because it is committed to `.env`. Nothing committed.
