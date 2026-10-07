@@ -344,3 +344,74 @@ the failure message.
 Not covered locally (needs the real runner): `sudo apt-get install expect`, `npm ci`/build, and a
 **real** surge token — if the shipped token is dead *and* the password is wrong, the job now fails
 with an explicit message instead of hanging, but only the run log will say which.
+
+---
+
+## Round 3 — local deploy to plst.surge.sh, then hard-simplify the workflow
+
+**Context:** the CI-side fix (rounds 1-2) works in tests but stays uncommitted/unproven on the real
+runner. Decision: deploy from this machine first, and if `plst.surge.sh` really is claimable,
+strip the workflow down to build → `200.html` → one `surge` publish.
+
+**Blocker found during read-only investigation:** `web/dist/app/browser/index.html` is **3 bytes
+and contains `hi`** (clobbered 2026-10-06 20:40; the real shell in `src/index.html` is 289 bytes).
+`200.html` is a copy of that corruption. Deploying as-is would publish a dead site → rebuild is
+mandatory. `node_modules` is installed, `package-lock.json` unchanged since 2026-10-01, source
+untouched since the last build (only `package.json` name/version changed).
+
+**Plan**
+1. Rebuild `web` (`npm run build -- --configuration production`), `cp index.html 200.html`,
+   assert the shell is real (`<app-root>`, >200 bytes).
+2. Login with `SURGE_TOKEN` (`surge login` with the token in env → `Logged in as token.`, no
+   prompts; the token path never writes `~/.netrc`). If it exits 1 → expect-driven
+   email/password login, which does write `~/.netrc`, and deploy without the env token.
+3. Deploy: `SURGE_TOKEN=… npx -y surge ./dist/app/browser plst.surge.sh` (explicit domain → no
+   prompts; `_creds.js` hands the env token to every command). If surge 403s the name → one
+   retry under `plst-<4hex>.surge.sh` and report it.
+4. Verify: HTTP 200 on `/`, body contains `<app-root>`, deep route `/foo` also returns the shell.
+5. Rewrite `web/.github/workflows/deploy-surge.yml` to: checkout → setup-node → `npm ci` → build →
+   `cp index.html 200.html` → one deploy step. Drop: expect driver, credential resolution step,
+   login step, domain logic, entropy retry, `contents: write`, the commit-back step, the
+   `token:` on checkout. Token still resolved as secret-then-`.env`, else fail fast (the
+   alternative - trusting `secrets.SURGE_TOKEN` alone - is exactly the "empty secret hangs on
+   `email:`" failure this workflow started with).
+6. Lint the YAML, sanity-test the deploy step's token resolution with a fake `surge`, write RESULT.
+
+**Nothing is committed (rule 5).** The rounds 1-2 workflow edits stay in the tree until step 5
+replaces them.
+
+### RESULT (round 3, part 1 — local deploy)
+
+**Done:** rebuild succeeded (873-byte `index.html` with `<app-root>`, `200.html` refreshed — the
+`hi` corruption is gone). YAML of the current workflow still parses.
+
+**Not done: no publish yet.** What it took to get that far, in order:
+
+1. `surge login` ignores `SURGE_TOKEN` **by design**: its chain is `browserLogin, auth`
+   (`surge.js:419`) and has no `creds` step, so it always prompts and never wrote `~/.netrc`.
+   Round 2's "token-first login" CI step was therefore dead code — `whoami` (via `_creds`) is the
+   real token validator.
+2. **Root cause of every "Deployment did not succeed"**: this machine's *direct* path to
+   `surge.surge.sh` accepts small requests but stalls on bodies ≳117 KB (0 bytes back, 40–150 s).
+   Proven with curl, not just the CLI: tiny PUT → 401/403 answered; 117 KB PUT → hang
+   (5/5: chunked, fixed-length, real tar, junk, two domains); same-size PUT to postman-echo →
+   200 in 0.28 s. Node therefore died on `ETIMEDOUT` / `UND_ERR_CONNECT_TIMEOUT`, and because
+   `fetchAccount` maps *any* error to "no account", a connect timeout also surfaced as the
+   misleading **`Invalid token`**. surge's client has no retry, so one stall = failure.
+3. **Fix: the proxy the user added** (`127.0.0.1:8080`). macOS system proxy settings are
+   invisible to curl/node, so it must be explicit — and surge has native support:
+   `NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:8080` (verified Node 22.23 honours it for
+   both `fetch` and `https.request`; surge even prints "re-run with NODE_USE_ENV_PROXY=1" from
+   `_proxy.js:23`). A hand-written CONNECT-agent `--require` hook also worked, but the built-in
+   flag made it unnecessary. **Everything must run with these two vars set.**
+4. With the proxy: real responses in ~10 s. `plst.surge.sh`, `plst-web`, `yaum`, `yaum-web`,
+   `plst-app`, `plstapp` **and an entropy name** all return `403 you do not have permission to
+   publish to …` → not a name problem: **the account can't publish anywhere**.
+5. `GET /account` shows why it might: **`email_verified_at: null`** (plan "Free/student-00",
+   perks: "Unlimited projects & publishing"). `npx surge verify` → `Email sent - follow the link
+   sent to borka135@atomicmail.io to verify.` **Waiting on the user clicking that link.**
+
+Consequence for the pending workflow simplification: `plst.surge.sh` is **taken by another
+account**, so the hardcoded domain in the plan is wrong — the domain must be re-decided after
+verification, and the CI run will need `NODE_USE_ENV_PROXY` only if GitHub's path has the same
+defect (unlikely — the failure was this network's path to surge).
