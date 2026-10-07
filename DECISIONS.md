@@ -263,3 +263,84 @@ missing *there*.
 Optional: set the repository **variable** `SURGE_DEPLOY_DOMAIN` (e.g. `plst.surge.sh`) to control
 the first-deploy domain; without it the job claims `<repo-slug>-<4hex>.surge.sh`, which is stable
 afterwards because it is committed to `.env`. Nothing committed.
+
+## 2026-10-07 — PLAN (rule 1, round 2): the credentials are in the generated `.env`, not in secrets
+
+### Symptom (from the slave repo's run of the workflow above)
+
+```
+spawn surge login
+   Login or create surge account by entering email & password.
+email:
+surge.exp: surge asked for an email but SERVICE_EMAIL is empty
+Error: Process completed with exit code 1.
+```
+
+The driver behaved exactly as designed — it refused to hang. The workflow asked GitHub
+`secrets.SERVICE_EMAIL`, which does not exist in the repo where the job runs; the credentials sit
+in the deploy tool's generated `.env` instead (`SERVICE_EMAIL`, `SERVICE_PASSWORD`, `SURGE_TOKEN`,
+plus `GIT_PAT`/`GIT_PASSWORD`, `PROJECT_ID=yaum`, `SLAVE_REPO=cat-house`, `COMMIT=<the push
+message>` — so that file is the slave's deploy manifest, generated per push).
+
+### Findings that shape the fix
+
+1. **`whoami` cannot validate a token.** `lib/middleware/whoami.js` ends with `process.exit()` —
+   no argument, i.e. **exit 0** — even on the `Not Authenticated!` path. Any
+   `if surge whoami --token …` check would silently pass for a dead token.
+   `surge login` does exit 1 (`Invalid token`, `auth.js`), so *it* is the validator.
+2. **`fetchAccount` ignores the email entirely** — `helpers.fetchAccount` calls
+   `sdk.account({user: "token", pass: token})`. So `surge login` with a `SURGE_TOKEN` present
+   validates the token without prompting, and with a token *absent* it takes the prompt path. One
+   command covers both, which is why the login step can just call the driver.
+3. **Step-level `env:` would blank out what we resolve.** `env:` on a step overrides the values
+   written to `$GITHUB_ENV` by an earlier step — with `${{ secrets.SERVICE_EMAIL }}` being an empty
+   string, keeping those blocks would undo the fix silently. They must go; only
+   `SURGE_DEPLOY_DOMAIN` stays.
+4. **The generated `.env` repeats keys** (`SURGE_TOKEN`, `SERVICE_EMAIL`, … appear twice), so every
+   read must take `head -1` of `grep '^KEY='` — the same trap the `SURGE_DOMAIN` reader already
+   guards against.
+5. **Domain churn risk.** That generator emits `SURGE_DOMAIN=` empty on every push. If it
+   regenerates rather than preserves, a random-entropy name would produce a *new* site per deploy.
+   A deterministic `<repo-slug>.surge.sh` is stable regardless of what happens to `.env`.
+6. **A foreign domain is rejected with exit 1** (`helpers.defaults[403]` → "Unauthorized -
+   Insufficient permission to access domain."), so a deterministic name that happens to be taken
+   fails loudly — worth one retry under a fresh entropy name, but only when *we* chose the name
+   (an explicitly configured domain must never be silently replaced).
+
+### Work
+
+1. New step **Resolve surge credentials**, right after checkout (fails before the 1-minute build):
+   GitHub secrets first, `.env` fallback, then write the chosen `SERVICE_EMAIL` /
+   `SERVICE_PASSWORD` / `SURGE_TOKEN` to `$GITHUB_ENV`; on nothing usable, exit 1 with a message
+   that says whether `.env` was even in the checkout and lists its **key names** (never values).
+2. Login step: if a token is available, try `surge login` with it (no prompts); on exit 1 clear the
+   token via `$GITHUB_ENV` and fall back to the expect-driven email/password login.
+3. Strip the credential `env:` blocks from the login and deploy steps.
+4. Domain: `vars.SURGE_DEPLOY_DOMAIN` → non-empty `.env` value → deterministic `<slug>.surge.sh`,
+   with a single entropy-named retry if that publish fails and we chose the name.
+5. Re-run the local harness (synthetic `.env` shaped like the real one, fake `surge`) + YAML lint.
+
+### RESULT
+**Round 2 — done.** `web/.github/workflows/deploy-surge.yml` now has the four steps above.
+
+Local harness (`surgetest/`: extracted step scripts + fake `surge` + synthetic `.env`) — **8/8**:
+
+| # | scenario | result |
+|---|---|---|
+| R1 | credentials only in `.env` (the real case), token valid | resolve `.env` → `token accepted` → publish `cat-house.surge.sh`, `.env` upserted |
+| R2 | `.env` token rejected | `SURGE_TOKEN was rejected` → expect answers `email:`/`password:` → publish |
+| R3 | no `.env`, no secrets | exit 1, `No surge credentials: … (missing)… / .env is NOT in the checkout.` |
+| R4 | `.env` without creds | exit 1, lists **key names only** (asserted: no values leaked) |
+| R5 | GitHub secrets present | secrets win, log says `SERVICE_EMAIL (GitHub secrets)` |
+| R6 | first deploy + redeploy | claims `cat-house.surge.sh` both times (deterministic, no churn) |
+| R7 | claimed name taken | one retry under `cat-house-d7d3.surge.sh`, exit 0 |
+| R8 | pinned `SURGE_DOMAIN` fails | exit 1, **no** retry, `.env` untouched |
+
+Also: `python3 yaml.safe_load` passes. A bug found *by* the harness was fixed mid-run: the
+resolve step's source label said `.env` even when secrets supplied the values (R5) — each of
+the three keys now carries its own `secrets`/`.env`/`missing` source, reported in the log and in
+the failure message.
+
+Not covered locally (needs the real runner): `sudo apt-get install expect`, `npm ci`/build, and a
+**real** surge token — if the shipped token is dead *and* the password is wrong, the job now fails
+with an explicit message instead of hanging, but only the run log will say which.

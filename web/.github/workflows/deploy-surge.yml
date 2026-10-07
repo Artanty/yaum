@@ -19,6 +19,56 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # The credentials live in the .env this repo's deploy tool generates, not
+      # in repository secrets. Secrets still win when they exist; .env is the
+      # fallback. Everything after this step reads SERVICE_EMAIL /
+      # SERVICE_PASSWORD / SURGE_TOKEN from $GITHUB_ENV.
+      - name: Resolve surge credentials
+        env:
+          SURGE_TOKEN: ${{ secrets.SURGE_TOKEN }}
+          SERVICE_EMAIL: ${{ secrets.SERVICE_EMAIL }}
+          SERVICE_PASSWORD: ${{ secrets.SERVICE_PASSWORD }}
+        run: |
+          email_src="GitHub secrets"; pass_src="GitHub secrets"; token_src="GitHub secrets"
+          if [ -z "$SERVICE_EMAIL" ]; then email_src="missing"; fi
+          if [ -z "$SERVICE_PASSWORD" ]; then pass_src="missing"; fi
+          if [ -z "$SURGE_TOKEN" ]; then token_src="missing"; fi
+
+          if [ -f .env ]; then
+            if [ "$email_src" = "missing" ]; then
+              SERVICE_EMAIL=$(grep -E '^SERVICE_EMAIL=' .env | head -1 | cut -d '=' -f2- | tr -d '\r')
+              if [ -n "$SERVICE_EMAIL" ]; then email_src=".env"; fi
+            fi
+            if [ "$pass_src" = "missing" ]; then
+              SERVICE_PASSWORD=$(grep -E '^SERVICE_PASSWORD=' .env | head -1 | cut -d '=' -f2- | tr -d '\r')
+              if [ -n "$SERVICE_PASSWORD" ]; then pass_src=".env"; fi
+            fi
+            if [ "$token_src" = "missing" ]; then
+              SURGE_TOKEN=$(grep -E '^SURGE_TOKEN=' .env | head -1 | cut -d '=' -f2- | tr -d '\r')
+              if [ -n "$SURGE_TOKEN" ]; then token_src=".env"; fi
+            fi
+          fi
+
+          if [ -n "$SERVICE_EMAIL" ] && [ -n "$SERVICE_PASSWORD" ]; then
+            echo "surge credentials: SERVICE_EMAIL ($email_src) + SERVICE_PASSWORD ($pass_src)"
+          elif [ -n "$SURGE_TOKEN" ]; then
+            echo "surge credentials: SURGE_TOKEN ($token_src)"
+          else
+            echo "No surge credentials: SERVICE_EMAIL ($email_src), SERVICE_PASSWORD ($pass_src), SURGE_TOKEN ($token_src)."
+            if [ -f .env ]; then
+              echo ".env is in the checkout with keys: $(grep -oE '^[A-Za-z_]+' .env | sort -u | tr '\n' ' ')"
+            else
+              echo ".env is NOT in the checkout."
+            fi
+            exit 1
+          fi
+
+          {
+            echo "SERVICE_EMAIL=$SERVICE_EMAIL"
+            echo "SERVICE_PASSWORD=$SERVICE_PASSWORD"
+            echo "SURGE_TOKEN=$SURGE_TOKEN"
+          } >> "$GITHUB_ENV"
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -121,26 +171,24 @@ jobs:
         run: cp dist/app/browser/index.html dist/app/browser/200.html
 
       - name: Log in to Surge
-        env:
-          SURGE_TOKEN: ${{ secrets.SURGE_TOKEN }}
-          SERVICE_EMAIL: ${{ secrets.SERVICE_EMAIL }}
-          SERVICE_PASSWORD: ${{ secrets.SERVICE_PASSWORD }}
         run: |
-          if [ -n "$SERVICE_EMAIL" ] && [ -n "$SERVICE_PASSWORD" ]; then
-            "$RUNNER_TEMP/surge-run" login
-          elif [ -n "$SURGE_TOKEN" ]; then
-            surge whoami --token "$SURGE_TOKEN"
-          else
-            # no credentials at all - let the driver report which prompt surge
-            # is waiting on instead of hanging the job for six hours
-            "$RUNNER_TEMP/surge-run" login
+          # A valid SURGE_TOKEN is the cleanest path: surge takes it from the
+          # environment and never prompts. If it is rejected (exit 1, "Invalid
+          # token"), drop it for the rest of the job so surge asks for
+          # email/password and the expect driver answers.
+          if [ -n "$SURGE_TOKEN" ]; then
+            if "$RUNNER_TEMP/surge-run" login; then
+              echo "token accepted - publishing will not prompt"
+              exit 0
+            fi
+            echo "SURGE_TOKEN was rejected - falling back to the email/password login"
+            echo "SURGE_TOKEN=" >> "$GITHUB_ENV"
+            unset SURGE_TOKEN
           fi
+          "$RUNNER_TEMP/surge-run" login
 
       - name: Deploy to Surge
         env:
-          SURGE_TOKEN: ${{ secrets.SURGE_TOKEN }}
-          SERVICE_EMAIL: ${{ secrets.SERVICE_EMAIL }}
-          SERVICE_PASSWORD: ${{ secrets.SERVICE_PASSWORD }}
           SURGE_DEPLOY_DOMAIN: ${{ vars.SURGE_DEPLOY_DOMAIN }}
         run: |
           SURGE_DOMAIN=""
@@ -148,21 +196,30 @@ jobs:
             SURGE_DOMAIN=$(grep -E '^SURGE_DOMAIN=' .env | head -1 | cut -d '=' -f2- | tr -d ' \n\r')
           fi
 
-          if [ -z "$SURGE_DOMAIN" ]; then
-            # claim a domain ourselves: prompting for it would hang the job
-            # just like the email prompt did, and parsing it back out of the
-            # log needs a full URL surge never prints.
-            if [ -n "$SURGE_DEPLOY_DOMAIN" ]; then
-              SURGE_DOMAIN="$SURGE_DEPLOY_DOMAIN"
-            else
-              slug=$(printf '%s' "${GITHUB_REPOSITORY##*/}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
-              [ -n "$slug" ] || slug="plst"
-              SURGE_DOMAIN="${slug}-$(openssl rand -hex 2).surge.sh"
-            fi
-            echo "No SURGE_DOMAIN found. First deploy... will publish to $SURGE_DOMAIN"
+          slug=$(printf '%s' "${GITHUB_REPOSITORY##*/}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+          [ -n "$slug" ] || slug="plst"
+
+          claimed=""
+          if [ -n "$SURGE_DEPLOY_DOMAIN" ]; then
+            SURGE_DOMAIN="$SURGE_DEPLOY_DOMAIN"
+          elif [ -z "$SURGE_DOMAIN" ]; then
+            # deterministic: the deploy tool rewrites .env with SURGE_DOMAIN=
+            # empty on every push, so a random name would move the site to a
+            # new address on every deploy.
+            SURGE_DOMAIN="${slug}.surge.sh"
+            claimed=yes
+            echo "No SURGE_DOMAIN found. First deploy... publishing to $SURGE_DOMAIN"
           fi
 
-          "$RUNNER_TEMP/surge-run" ./dist/app/browser "$SURGE_DOMAIN"
+          if ! "$RUNNER_TEMP/surge-run" ./dist/app/browser "$SURGE_DOMAIN"; then
+            if [ -z "$claimed" ]; then
+              echo "Publishing to $SURGE_DOMAIN failed. The name is set explicitly, so it is not being replaced - check the surge output above (a domain owned by someone else is a 403)."
+              exit 1
+            fi
+            echo "$SURGE_DOMAIN is not publishable (probably already taken) - retrying under a fresh name"
+            SURGE_DOMAIN="${slug}-$(openssl rand -hex 2).surge.sh"
+            "$RUNNER_TEMP/surge-run" ./dist/app/browser "$SURGE_DOMAIN"
+          fi
 
           if [ -f .env ] && grep -q '^SURGE_DOMAIN=' .env; then
             sed -i.bak "s|^SURGE_DOMAIN=.*|SURGE_DOMAIN=$SURGE_DOMAIN|" .env && rm -f .env.bak
