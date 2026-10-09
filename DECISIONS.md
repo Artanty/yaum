@@ -2,416 +2,171 @@
 
 Current thread only. Prior sessions: `DECISIONS-archive.md`.
 
-*(Older entries moved to `DECISIONS-archive.md` per AGENTS.md rule 4 — this file holds the rename to
-`plst`, the user rename, and the library playlist/export work. The ext-logs routing thread that was
-here before is now in the archive.)*
-
-## 2026-10-01 — PLAN (rule 1): rename to `plst`, rename the two users, and add library
-### playlist-creation + YouTube Music link export to the web app
-
-Three requests. Two are mechanical; the third turned out to be mostly absent infrastructure, so the
-findings come first — they are what shape the work.
-
-#### What the code actually says (checked before planning, not after)
-
-1. **Two names are in play, not one.** `mush` (backend: `back/package.json` name, the `<title>` and
-   `<h1>` in `back/views/partials/head.ejs:6,27`, the description in `back/AGENTS.md`) and `yaum`
-   (extension manifest + `ext/package.json`, the five route titles in `web/src/app/app.routes.ts`,
-   the session key `yaum.userId` in `web/src/app/core/session.ts:9`, `YAUM_API` in
-   `web/proxy.conf.js`, the extension log key `yaum.log` in `ext/log.js:15`, and `mush.server` in
-   `ext/popup.js:88,270,364` + `ext/ship.js:37`). Renaming the storage keys is the one risky part:
-   it silently drops the saved backend URL and the logged-in user.
-2. **The user seed has a typo and a stale key.** `SEED_USERS` is
-   `[{username:'artyom', displayName:'Artiom'}, {username:'friend', displayName:'Friend'}]`
-   (`back/src/library/store.ts:27`). `seedUsers` upserts on `username` with
-   `ON DUPLICATE KEY UPDATE display_name=VALUES(display_name)`, so editing the seed alone would
-   **strand** the existing `friend` row instead of renaming it — you would end up with three users.
-3. **Playlist creation from the library needs no backend work at all.** `POST /playlists/:id/items`
-   (`back/src/library/routes.ts:540`) already validates song ids and `store.addPlaylistItems`
-   (`store.ts:544`) already inserts them positionally. The web client already has
-   `createPlaylist()` and `addTracks()` (`web/src/app/core/library-api.ts:120,132`). What is missing
-   is only the UI: `library.html` renders a plain table with no row selection and calls neither
-   method. This is a pure front-end task.
-4. **No library song has ever been matched to YouTube.** `songs` has `yt_video_id`, `match_score`,
-   `matched_at` (`back/src/library/schema.ts:60-62`, mirrored in `types.ts:15-17`) and **nothing
-   writes them** — the only writer of a video id is the old converter (`back/src/db.ts`,
-   `pipeline.ts`) which fills a *different* table for the `/migrate` + `/job/:id` flow. So a link
-   export on its own would render an empty list, every time.
-5. **The matching primitives are reusable.** `matcher.buildQueries()` / `matchTrack()`
-   (`back/src/matcher.ts:73,97`) take a `TrackMeta` of exactly the fields a library song already
-   has (title, artists[], album, duration) and return `MatchResult` with `videoId` + `score`.
-   `pipeline.matchWithSearch()` (`pipeline.ts:33`) wraps that with the match cache, a PQueue and
-   injectable deps — the seam that makes mocked testing possible.
-6. **This machine cannot reach YouTube.** `back/AGENTS.md:82` is explicit: connections silently drop,
-   live matching needs `YTM_PROXY` or another host. So the match work can only be verified with
-   mocked search deps here — the same rule the rest of the converter already follows.
-
-#### Decisions taken (confirmed with the user)
-
-- **Scope of the rename: everything**, including `yaum` and the persisted storage keys, with a
-  one-time fallback read of the old keys so the saved server URL and logged-in user survive.
-- **Users: rename in place, keep ids**, so owned playlists and shares are not orphaned.
-- **YouTube links: build the match action, then export** — not a permanently empty export.
-
-#### Work
-
-1. **Rename to `plst`.** `mush` → `plst` in backend package/views/AGENTS; `yaum` → `plst` in the
-   extension manifest and package name, the five route titles, the page header; storage keys
-   `yaum.log` → `plst.log`, `yaum.userId` → `plst.userId`, `mush.server` → `plst.server` and
-   `yaum.logLevel` → `plst.logLevel`, each with a legacy-key fallback on read; `YAUM_API` →
-   `PLST_API` with `YAUM_API` still honoured. Rename is done with word-boundary regexes, and
-   everything under `node_modules`, `logs/`, `dist/` and `package-lock.json` is left alone.
-2. **Users.** A one-time, idempotent migration renames `friend` → `zaur` in place (one `UPDATE`,
-   so the id and every playlist/share it owns stay intact) and fixes `Artiom` → `Artyom`; the seed
-   becomes `artyom`/`Artyom` + `zaur`/`Zaur` so fresh installs agree. Migration runs once at
-   startup next to `seedUsers` and logs what it changed.
-3. **Create a playlist from the library.** Selection lives in `LibraryApi` as a signal (a `Set` of
-   song ids) so it survives paging and filter changes — otherwise selecting a song on page 1 and
-   paging to page 2 silently drops it, which is the kind of bug that only shows up on real data.
-   The library page gets a checkbox column, a selection toolbar with "create playlist" and "add to
-   playlist", and a per-row menu on the playlist page for adding a single song.
-4. **Match + export.** A new library match step that runs the existing matcher over a song and
-   persists `yt_video_id` / `match_score` / `matched_at`, exposed as an endpoint for one song and for
-   a whole playlist (batch, capped, per-song outcome reported). Export renders the plain
-   `https://music.youtube.com/watch?v=<videoId>` line list, and **lists unmatched songs by name
-   rather than dropping them silently** — a short export that looks complete is the dangerous case.
-   UI: match/copy per song, match-all + export on the playlist page.
-5. **Verify.** Backend `tsc` + tests, web tests, then exercise the new endpoints against the running
-   server with `curl` (match steps mocked or expected to fail as not-found on this host, and that
-   is reported as such rather than claimed as a success).
-
-Open risk to watch: renaming `friend` → `zaur` in place assumes no *other* row already claims
-`zaur`; the migration must check that first and skip with a log line if it does.
-
-### RESULT — all three shipped and verified
-
-**1. Renamed to `plst`.** 187 occurrences across 31 files. Two names were in play (`mush` in the
-backend, `yaum` in the extension and web app), plus the storage keys, the `YAUM_API`/`MUSH_RUN` env
-vars, and the `yaumLog`/`yaumShip` globals. Renamed package names to `plst`, `plst-ext`, `plst-web`;
-manifest name `plst`. **`DECISIONS*.md` deliberately keep the old names** — they are a historical
-record of what things were called, not product-facing docs.
-
-The risky part was the persisted keys, and each one gets a fallback read so nothing is lost:
-`plst.server`←`mush.server`, `plst.userId`←`yaum.userId`, `plst.logLevel`←`yaum.logLevel`, and
-`plst.log` adopts the old `yaum.log` **buffer** (otherwise the rename silently discards up to 300
-unshipped entries). `PLST_API` still honours `YAUM_API`; `PLST_RUN` still honours `MUSH_RUN`.
-
-*Process note:* the first rename attempt used `sed -i '' -e 's/\bmush\b/…'`. **BSD sed has no `\b`**,
-so those rules silently matched nothing while looking like they ran. A leftover grep caught it, and
-the fix was perl with real word boundaries. Nothing was half-renamed — the failing sed wrote no file.
-
-**2. Users.** The real DB now returns `1/artyom/Artyom` and `2/zaur/Zaur` — **id 2 preserved**, which
-was the whole point: playlists and shares owned by the old `friend` row stay attached. Done with a
-one-time migration (`library/migrations.ts`) rather than by editing the seed, because `seedUsers`
-upserts on `username` and would have inserted a *third* user beside the old row. The migration
-checks for a taken name first and skips loudly rather than violating `uq_users_username`, and is
-silent when there is nothing to rename — a first draft logged "target name already taken" on every
-fresh boot, which a test caught.
-
-Side effect worth knowing: the earlier `library: scan imported {tracks:3}` line I could not account
-for came from **the test suite**, not from you. The live DB had no songs.
-
-**3a. Playlist from the library.** Backend already had `POST /playlists/:id/items`; the web client
-already had `createPlaylist()`/`addTracks()`. What was missing was the UI. Added a checkbox column, a
-selection toolbar ("create playlist" / "add to…" / "match" / "export"), and
-`POST /playlists {songIds}` as **one transaction** — create-then-add over HTTP leaves an empty
-playlist behind whenever the second call fails. Selection state lives in `LibraryApi`, not the page,
-because the songs resource is paged and a page-held selection is rebuilt from the visible rows.
-
-**3b. YouTube Music links.** The blocker was real: `songs.yt_video_id` existed but **nothing had ever
-written it**, so the export would have been permanently empty. `library/match.ts` reuses the existing
-`matcher.ts` rather than reimplementing scoring, with `searchSongs` injected for tests. Endpoints:
-`POST /songs/:id/match`, `POST /playlists/:id/match` (capped 50), `GET /export/youtube`.
-
-**Two findings that changed the work:**
-
-- **`back/AGENTS.md:82` was wrong.** It claimed this machine cannot reach YouTube, so matching had to
-  be mocked. It can: `YTM_PROXY` is set in `.env`, and a live search returned 20 real candidates,
-  `Roxanne → fZheUzgIFEk` at score **1.00**. Only *direct* connections are blocked. Corrected in
-  AGENTS.md — that line was actively steering work away from real verification.
-- **My first export was quietly wrong.** A live playlist match produced `Roxanne → WMl1xKJeuuQ`, which
-  is **"Message In A Bottle — The Police"** (score 0.568, `uncertain`), and the export pasted it as
-  if it were Roxanne. Cause: I treated any stored `yt_video_id` as good. Now derived from the score:
-  confident matches are links, `uncertain` ones are listed separately and **commented out** of the
-  text, and unmatched songs are still named. Verified after the fix — pasting yields only
-  `KJEzFvXx3Xw`, with the bad one flagged for review.
-
-Verified live on a throwaway MySQL DB (dropped afterwards; the real DB was not used for test tracks):
-create-from-selection preserves order and rejects unknown ids with a 400 naming them; the export lists
-unmatched songs instead of dropping them; a real match stores the video id.
-
-`back` 86 tests (11 files), `ext` 27, `web` 25; `tsc` clean in both TS projects. Nothing committed.
-
-## 2026-10-07 — PLAN (rule 1): make the Surge deploy workflow answer surge's interactive prompts
-
-### Symptom
-
-Log ends at:
-
-```
-No SURGE_DOMAIN found. First deploy...
-   Welcome to surge! (surge.sh)
-   Login or create surge account by entering email & password.
-email:
-```
-
-The job hangs there (GitHub eventually kills it at 6h) — surge wants a human.
-
-### What the code and the surge CLI actually say (checked first)
-
-1. **Where the workflow lives.** The only workflow in this repo is
-   `web/.github/workflows/deploy-surge.yml`. GitHub only runs workflows from the *root*
-   `.github/workflows`, so this file runs in the "slave" repo that receives `web/` at its root —
-   not in `Artanty/yaum`. Consequence: secrets (`SERVICE_EMAIL`, `SERVICE_PASSWORD`,
-   `SURGE_TOKEN`) and any repo variable must exist **there**, and `web/.env` (which carries a real
-   email locally) is gitignored here, so it never reaches CI — `.env` in CI is created by the
-   workflow itself on the first deploy.
-2. **Why the pipe never worked.** `web/.github/workflows/deploy-surge.yml:50,58,72` feed surge's
-   stdin with `printf "%s\n%s\n" | surge ...`. Surge's prompts come from the `read` package
-   (`read@1.0.5`): a prompt is only interactive when `opts.terminal || output.isTTY`, and under
-   Actions stdout is a pipe, so the login form does not consume the piped lines — it sits on
-   `email:` forever. This is not fixable by piping; it needs a pty. Hence `expect`.
-3. **There are up to three prompts, not two.** Reading the surge 0.44.5 source (`npm pack surge`):
-   - auth (`lib/middleware/_shared/auth.js` → `helpers.loginForm`) asks `email:` then `password:`
-     (password with `silent: true`, so it is **not** echoed — and GitHub masks secrets anyway);
-   - a wrong password reprompts 3× and then asks `forgot?` with default `yes` — answering that
-     with the default *triggers a password-reset email*, so expect must answer `no`;
-   - `surge <path> publish` with no domain reaches `discovery.resolve({prompt:true})` and asks a
-     **third** prompt, `domain:` (suggestion is the project dir name, i.e. `browser.surge.sh`).
-     Fixing only login would just move the hang from `email:` to `domain:`.
-4. **The URL grep in the workflow can never match.** `deploy.js` prints
-   `Success! - Published to <domain>` and the recap prints `domain: <domain>` — **no `https://…`
-   line anywhere**, so `grep -oE 'https?://…\.surge\.sh'` (line 64) always returns empty and
-   `.env` would never be written even after a successful deploy.
-5. **`surge login` does the right thing non-interactively-ish**: `browserLogin` no-ops without
-   `--browser`, then `auth` prompts (driven by expect) and `localCreds().set()` writes `~/.surgerc`,
-   after which later publishes do not prompt for credentials at all.
-6. **A domain given as an argument skips the prompt entirely** — `_shorthand.js` maps
-   `argv._[1]` to `req.domain`, and `discovery.resolve` then uses it as `source: "arg"`.
-
-### Decisions
-
-- **Drive surge through `expect`** (a pty), with one small driver script written into
-  `$RUNNER_TEMP/surge.exp`: it spawns whatever surge command it is given, answers `email:` /
-  `password:` from `SERVICE_EMAIL` / `SERVICE_PASSWORD`, answers `forgot?` with `no`, answers a
-  stray `domain:` prompt by accepting the suggestion, gives up loudly after 600s or 3 attempts
-  (instead of hanging for 6 hours), and **propagates surge's exit status** so a failed login fails
-  the job.
-- **Pick the domain in the workflow, before deploying**, so it is known without parsing surge's
-  output: `vars.SURGE_DEPLOY_DOMAIN` if the user set a repo variable, otherwise
-  `<repo-slug>-<4 hex>.surge.sh` (entropy because surge's own source says bare names are taken).
-  This removes the third prompt, the URL grep, and the whole "deploy again with saved domain" step.
-- **Write `.env` with an upsert** (sed replace / append / create), never blind `>>` — the old
-  append would produce two `SURGE_DOMAIN=` lines after a second first-deploy and the next run
-  would read the empty one.
-- **Add `permissions: contents: write`** so the `.env` commit step can push with `GITHUB_TOKEN`
-  on a read-only-by-default repo; use `git add -f .env` so an ignore rule cannot fail the step.
-- Keep `SURGE_TOKEN` working: surge reads `SURGE_TOKEN` from the environment itself
-  (`_creds.js:8`), so the explicit `--token` plumbing goes away.
-
-### Work
-
-1. Rewrite `web/.github/workflows/deploy-surge.yml`: install `expect` (only if missing), write the
-   expect driver + a `surge-run` wrapper, login step through expect, deploy step that resolves the
-   domain first and then runs `surge ./dist/app/browser <domain>` through expect, commit `.env`.
-2. Test the expect driver **locally** against a mock program that prints the same prompts (email,
-   password, domain, `forgot?`) — verify answers are sent, exit codes propagate, and the
-   "SERVICE_EMAIL is empty" path fails fast.
-3. YAML-lint the workflow, then write the RESULT below.
-
-### RESULT — workflow rewritten, driver tested against mocks and the real surge CLI
-
-`web/.github/workflows/deploy-surge.yml` now: installs `expect` (only if missing), writes
-`$RUNNER_TEMP/surge.exp` + a `surge-run` wrapper into `$RUNNER_TEMP`, logs in through the driver,
-resolves the domain **before** deploying, runs `surge ./dist/app/browser <domain>` through the
-driver, upserts `.env`, and commits it. The URL grep, the `printf | surge` pipes, and the whole
-"Deploy again with saved domain" step are gone. Added `permissions: contents: write` (the `.env`
-push needs it on a read-only-by-default token) and `git add -f .env`.
-
-**Two bugs the tests caught before anything was pushed:**
-
-- `puts "\n[surge.exp] …"` — in Tcl `[...]` is *command substitution*, so the driver died with
-  `invalid command name "surge.exp"` the moment it answered the first prompt. Messages are now
-  `surge.exp: …`.
-- `run: "$RUNNER_TEMP/surge-run" login` is invalid YAML (a quoted scalar followed by more text).
-  The first `yaml.safe_load` failed on it; now single-quoted as a whole.
-
-**Verified locally:**
-
-- Mock prompts: answers email/password/domain, exit 0; missing `SERVICE_EMAIL` → exit 1 naming the
-  secret; three wrong passwords → `forgot?` answered `no` (ctrl-u clears surge's pre-filled `yes`)
-  → mock's exit 3 propagated; a prompt-less command → exit 42 propagated. The `domain:` branch
-  also ignores surge's second `domain:` line (the recap), so it never double-sends.
-- **Real surge 0.44.5** (`npx -y surge@0.44.5 login`, no credentials set): driver matched the real
-  ANSI-padded prompt (`\x1b[90m          email:\x1b[39m`), sent the email, surge advanced to
-  `password:`, and the driver exited 1 naming `SERVICE_PASSWORD` — no account was created, no API
-  call was made, no hang.
-- Surge source confirms `<path> <domain>` sets `req.domain` via `_shorthand.js` and
-  `discovery.resolve` then takes `source: "arg"` — so **the domain prompt never happens**; the
-  `domain:` branch in the driver is only a fallback. `validDomain('yaum-web-56d2.surge.sh')` → true.
-- Deploy step exercised with a fake `surge` on PATH: no `.env` → claims
-  `<repo-slug>-<4hex>.surge.sh`; `.env` with `SURGE_DOMAIN=` plus another key → line replaced in
-  place (no duplicate, other key kept); existing domain → reused silently; `SURGE_DEPLOY_DOMAIN`
-  → honoured.
-
-**Not verifiable from this machine:** the real credential exchange (needs the secrets). Note the
-secrets must live in the repo **where this workflow runs** — a slave repo that receives `web/` at
-its root, since GitHub ignores `web/.github/workflows` inside `Artanty/yaum`. If the log shows
-`surge.exp: surge asked for an email but SERVICE_EMAIL is empty`, that is the cause: the secret is
-missing *there*.
-
-Optional: set the repository **variable** `SURGE_DEPLOY_DOMAIN` (e.g. `plst.surge.sh`) to control
-the first-deploy domain; without it the job claims `<repo-slug>-<4hex>.surge.sh`, which is stable
-afterwards because it is committed to `.env`. Nothing committed.
-
-## 2026-10-07 — PLAN (rule 1, round 2): the credentials are in the generated `.env`, not in secrets
-
-### Symptom (from the slave repo's run of the workflow above)
-
-```
-spawn surge login
-   Login or create surge account by entering email & password.
-email:
-surge.exp: surge asked for an email but SERVICE_EMAIL is empty
-Error: Process completed with exit code 1.
-```
-
-The driver behaved exactly as designed — it refused to hang. The workflow asked GitHub
-`secrets.SERVICE_EMAIL`, which does not exist in the repo where the job runs; the credentials sit
-in the deploy tool's generated `.env` instead (`SERVICE_EMAIL`, `SERVICE_PASSWORD`, `SURGE_TOKEN`,
-plus `GIT_PAT`/`GIT_PASSWORD`, `PROJECT_ID=yaum`, `SLAVE_REPO=cat-house`, `COMMIT=<the push
-message>` — so that file is the slave's deploy manifest, generated per push).
-
-### Findings that shape the fix
-
-1. **`whoami` cannot validate a token.** `lib/middleware/whoami.js` ends with `process.exit()` —
-   no argument, i.e. **exit 0** — even on the `Not Authenticated!` path. Any
-   `if surge whoami --token …` check would silently pass for a dead token.
-   `surge login` does exit 1 (`Invalid token`, `auth.js`), so *it* is the validator.
-2. **`fetchAccount` ignores the email entirely** — `helpers.fetchAccount` calls
-   `sdk.account({user: "token", pass: token})`. So `surge login` with a `SURGE_TOKEN` present
-   validates the token without prompting, and with a token *absent* it takes the prompt path. One
-   command covers both, which is why the login step can just call the driver.
-3. **Step-level `env:` would blank out what we resolve.** `env:` on a step overrides the values
-   written to `$GITHUB_ENV` by an earlier step — with `${{ secrets.SERVICE_EMAIL }}` being an empty
-   string, keeping those blocks would undo the fix silently. They must go; only
-   `SURGE_DEPLOY_DOMAIN` stays.
-4. **The generated `.env` repeats keys** (`SURGE_TOKEN`, `SERVICE_EMAIL`, … appear twice), so every
-   read must take `head -1` of `grep '^KEY='` — the same trap the `SURGE_DOMAIN` reader already
-   guards against.
-5. **Domain churn risk.** That generator emits `SURGE_DOMAIN=` empty on every push. If it
-   regenerates rather than preserves, a random-entropy name would produce a *new* site per deploy.
-   A deterministic `<repo-slug>.surge.sh` is stable regardless of what happens to `.env`.
-6. **A foreign domain is rejected with exit 1** (`helpers.defaults[403]` → "Unauthorized -
-   Insufficient permission to access domain."), so a deterministic name that happens to be taken
-   fails loudly — worth one retry under a fresh entropy name, but only when *we* chose the name
-   (an explicitly configured domain must never be silently replaced).
-
-### Work
-
-1. New step **Resolve surge credentials**, right after checkout (fails before the 1-minute build):
-   GitHub secrets first, `.env` fallback, then write the chosen `SERVICE_EMAIL` /
-   `SERVICE_PASSWORD` / `SURGE_TOKEN` to `$GITHUB_ENV`; on nothing usable, exit 1 with a message
-   that says whether `.env` was even in the checkout and lists its **key names** (never values).
-2. Login step: if a token is available, try `surge login` with it (no prompts); on exit 1 clear the
-   token via `$GITHUB_ENV` and fall back to the expect-driven email/password login.
-3. Strip the credential `env:` blocks from the login and deploy steps.
-4. Domain: `vars.SURGE_DEPLOY_DOMAIN` → non-empty `.env` value → deterministic `<slug>.surge.sh`,
-   with a single entropy-named retry if that publish fails and we chose the name.
-5. Re-run the local harness (synthetic `.env` shaped like the real one, fake `surge`) + YAML lint.
-
-### RESULT
-**Round 2 — done.** `web/.github/workflows/deploy-surge.yml` now has the four steps above.
-
-Local harness (`surgetest/`: extracted step scripts + fake `surge` + synthetic `.env`) — **8/8**:
-
-| # | scenario | result |
-|---|---|---|
-| R1 | credentials only in `.env` (the real case), token valid | resolve `.env` → `token accepted` → publish `cat-house.surge.sh`, `.env` upserted |
-| R2 | `.env` token rejected | `SURGE_TOKEN was rejected` → expect answers `email:`/`password:` → publish |
-| R3 | no `.env`, no secrets | exit 1, `No surge credentials: … (missing)… / .env is NOT in the checkout.` |
-| R4 | `.env` without creds | exit 1, lists **key names only** (asserted: no values leaked) |
-| R5 | GitHub secrets present | secrets win, log says `SERVICE_EMAIL (GitHub secrets)` |
-| R6 | first deploy + redeploy | claims `cat-house.surge.sh` both times (deterministic, no churn) |
-| R7 | claimed name taken | one retry under `cat-house-d7d3.surge.sh`, exit 0 |
-| R8 | pinned `SURGE_DOMAIN` fails | exit 1, **no** retry, `.env` untouched |
-
-Also: `python3 yaml.safe_load` passes. A bug found *by* the harness was fixed mid-run: the
-resolve step's source label said `.env` even when secrets supplied the values (R5) — each of
-the three keys now carries its own `secrets`/`.env`/`missing` source, reported in the log and in
-the failure message.
-
-Not covered locally (needs the real runner): `sudo apt-get install expect`, `npm ci`/build, and a
-**real** surge token — if the shipped token is dead *and* the password is wrong, the job now fails
-with an explicit message instead of hanging, but only the run log will say which.
-
----
-
-## Round 3 — local deploy to plst.surge.sh, then hard-simplify the workflow
-
-**Context:** the CI-side fix (rounds 1-2) works in tests but stays uncommitted/unproven on the real
-runner. Decision: deploy from this machine first, and if `plst.surge.sh` really is claimable,
-strip the workflow down to build → `200.html` → one `surge` publish.
-
-**Blocker found during read-only investigation:** `web/dist/app/browser/index.html` is **3 bytes
-and contains `hi`** (clobbered 2026-10-06 20:40; the real shell in `src/index.html` is 289 bytes).
-`200.html` is a copy of that corruption. Deploying as-is would publish a dead site → rebuild is
-mandatory. `node_modules` is installed, `package-lock.json` unchanged since 2026-10-01, source
-untouched since the last build (only `package.json` name/version changed).
-
-**Plan**
-1. Rebuild `web` (`npm run build -- --configuration production`), `cp index.html 200.html`,
-   assert the shell is real (`<app-root>`, >200 bytes).
-2. Login with `SURGE_TOKEN` (`surge login` with the token in env → `Logged in as token.`, no
-   prompts; the token path never writes `~/.netrc`). If it exits 1 → expect-driven
-   email/password login, which does write `~/.netrc`, and deploy without the env token.
-3. Deploy: `SURGE_TOKEN=… npx -y surge ./dist/app/browser plst.surge.sh` (explicit domain → no
-   prompts; `_creds.js` hands the env token to every command). If surge 403s the name → one
-   retry under `plst-<4hex>.surge.sh` and report it.
-4. Verify: HTTP 200 on `/`, body contains `<app-root>`, deep route `/foo` also returns the shell.
-5. Rewrite `web/.github/workflows/deploy-surge.yml` to: checkout → setup-node → `npm ci` → build →
-   `cp index.html 200.html` → one deploy step. Drop: expect driver, credential resolution step,
-   login step, domain logic, entropy retry, `contents: write`, the commit-back step, the
-   `token:` on checkout. Token still resolved as secret-then-`.env`, else fail fast (the
-   alternative - trusting `secrets.SURGE_TOKEN` alone - is exactly the "empty secret hangs on
-   `email:`" failure this workflow started with).
-6. Lint the YAML, sanity-test the deploy step's token resolution with a fake `surge`, write RESULT.
-
-**Nothing is committed (rule 5).** The rounds 1-2 workflow edits stay in the tree until step 5
-replaces them.
-
-### RESULT (round 3, part 1 — local deploy)
-
-**Done:** rebuild succeeded (873-byte `index.html` with `<app-root>`, `200.html` refreshed — the
-`hi` corruption is gone). YAML of the current workflow still parses.
-
-**Not done: no publish yet.** What it took to get that far, in order:
-
-1. `surge login` ignores `SURGE_TOKEN` **by design**: its chain is `browserLogin, auth`
-   (`surge.js:419`) and has no `creds` step, so it always prompts and never wrote `~/.netrc`.
-   Round 2's "token-first login" CI step was therefore dead code — `whoami` (via `_creds`) is the
-   real token validator.
-2. **Root cause of every "Deployment did not succeed"**: this machine's *direct* path to
-   `surge.surge.sh` accepts small requests but stalls on bodies ≳117 KB (0 bytes back, 40–150 s).
-   Proven with curl, not just the CLI: tiny PUT → 401/403 answered; 117 KB PUT → hang
-   (5/5: chunked, fixed-length, real tar, junk, two domains); same-size PUT to postman-echo →
-   200 in 0.28 s. Node therefore died on `ETIMEDOUT` / `UND_ERR_CONNECT_TIMEOUT`, and because
-   `fetchAccount` maps *any* error to "no account", a connect timeout also surfaced as the
-   misleading **`Invalid token`**. surge's client has no retry, so one stall = failure.
-3. **Fix: the proxy the user added** (`127.0.0.1:8080`). macOS system proxy settings are
-   invisible to curl/node, so it must be explicit — and surge has native support:
-   `NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:8080` (verified Node 22.23 honours it for
-   both `fetch` and `https.request`; surge even prints "re-run with NODE_USE_ENV_PROXY=1" from
-   `_proxy.js:23`). A hand-written CONNECT-agent `--require` hook also worked, but the built-in
-   flag made it unnecessary. **Everything must run with these two vars set.**
-4. With the proxy: real responses in ~10 s. `plst.surge.sh`, `plst-web`, `yaum`, `yaum-web`,
-   `plst-app`, `plstapp` **and an entropy name** all return `403 you do not have permission to
-   publish to …` → not a name problem: **the account can't publish anywhere**.
-5. `GET /account` shows why it might: **`email_verified_at: null`** (plan "Free/student-00",
-   perks: "Unlimited projects & publishing"). `npx surge verify` → `Email sent - follow the link
-   sent to borka135@atomicmail.io to verify.` **Waiting on the user clicking that link.**
-
-Consequence for the pending workflow simplification: `plst.surge.sh` is **taken by another
-account**, so the hardcoded domain in the plan is wrong — the domain must be re-decided after
-verification, and the CI run will need `NODE_USE_ENV_PROXY` only if GitHub's path has the same
-defect (unlikely — the failure was this network's path to surge).
+*(Older entries moved to `DECISIONS-archive.md` per AGENTS.md rule 4 — now three times: 2026-09-29
+(the ext-logs routing thread), 2026-10-07 (the `plst` rename + library/export thread and the Surge
+workflow rounds), and archived on 2026-10-09: the React port (2026-10-07) and the header-styles fix
+(2026-10-08). This file holds the Surge static-deploy probe.)*
+
+## 2026-10-09 — PLAN (rule 1): Surge deploy fails on the big React bundle → move React to `web-react`, put a build-free pure-JS app in `web`
+
+**Report/experiment:** publishing the built React app to Surge fails; deleting every file but one and
+emptying it to a single function made the deploy succeed. Working theory: the deploy chokes on the
+built JS bundle, not on the app.
+
+**Approach (user-chosen): "no build at all".**
+
+- `web/` (React app, incl. `node_modules`/`dist`/`.github`) moves to `web-react/`.
+- New `web/` is plain static files: `index.html` + ES modules + one small CSS file. No bundler, no
+  React, **no npm at all**.
+- Parity kept to the essentials: shell (nav, user switcher, 15s poll, pending-import toast), the 5
+  routes, `x-user-id` only on `/api/library/*`, selection at module scope (page-1 ticks survive
+  "next"), exports name unmatched/uncertain. Facets (genres/artists/albums) dropped and styling is
+  minimal — this is a deploy probe, not a finished UI.
+- `web/.github/workflows/deploy-surge.yml`: credential/login/domain logic untouched; drop
+  setup-node/`npm ci`/build; publish the repo root directly; `index.html` → `200.html` for the SPA
+  fallback. `.surgeignore` excludes everything that is not site content.
+
+**Work:** 1) move dir, 2) write the static app, 3) re-point the workflow, 4) verify by serving the
+folder against the real backend, 5) RESULT below.
+
+Nothing committed (rule 5).
+
+### RESULT — `web/` is now a build-free static app; `web-react/` keeps the React app
+
+**Done.** `web-react/` is the untouched React app (git will see the old `web/` as renames once
+staged). New `web/` is 15 small files — `index.html`, `styles.css`, `src/*.js` ES modules, no
+`package.json`, no bundler, no React. Publish set is **51.5 kB total**, largest single file 12.2 kB
+(`src/pages/playlist-detail.js`).
+
+**Kept:** the 5 routes + shell, nav badges, user switcher, 15s poll, pending-import toast,
+`x-user-id` on `/api/library/*` only, selection at module scope (page-1 ticks survive "next"),
+`songIds` sent to `POST /imports/:id/playlist` only when something was deselected, and exports that
+name unmatched/uncertain songs. `core/` became `api.js` (fetch + header + `errorText`), `session.js`,
+`store.js` (resource cache = `httpResource`), `format.js`, `router.js` (history API + `200.html`
+fallback), `ui.js`.
+
+**Dropped (test probe, not a finished UI):** genre/artist/album facets, playlist sharing UI
+(collaborators), source-maps, SCSS — styling is one small global `styles.css`.
+
+**Workflow** `web/.github/workflows/deploy-surge.yml`: credential resolution / expect driver /
+login / domain logic untouched. Removed `setup-node`, `npm ci`, "Build React app"; SPA fallback is
+now `cp index.html 200.html`; publish target is `.` instead of `./dist`. `.surgeignore` excludes
+`.git`, `.github`, `node_modules`, `*.md`, `.env*` (and deliberately **not** `src`).
+
+**Verified** in a real browser (Playwright chromium 1234) against the real backend on :8000, via a
+static server that proxies `/api`: library renders 2 songs + `2 songs` stat, nav shows the
+`Imports 1` badge, switcher shows Artyom/Zaur, ticking a row reveals the selection bar and it
+**survives client-side nav**, imports shows its 1 card, `/playlists/999` latches `could not load
+this playlist: playlist not found`, and switching to user 2 sends `x-user-id: 2` on every
+`/api/library/*` request. **0 page errors** (only the expected 404 console line). No mutation
+endpoint was called — nothing was written to the real DB. Backend and the probe server were stopped.
+
+**On the theory:** the real React build is `index-*.js` = **270.6 kB** raw / 86.3 kB gzip (measured
+with `vite build --outDir dist-build-test`, then removed). The old `web-react/dist/` on disk was
+*not* a real build — it is your one-file test leftover (19-byte JS + `200.html` + `CNAME`). So the
+deploy failure is not explained by "a huge bundle": 270 kB is ordinary. The build-free app is still
+the right probe — if it deploys where the React build did not, the difference is something about the
+React output (a chunk, a filename, or the bundle size), not the app.
+
+Nothing committed (rule 5).
+
+### 2026-10-09 — FOLLOW-UP (rule 1): the publish succeeded; add the Surge SPA fallback
+
+**Finding:** the manual `surge publish` to `simple3453t3fg4344.surge.sh` actually succeeded — Surge
+writes `CNAME` only in its `success` handler (`surge/lib/middleware/deploy.js:295-315`), and the live
+URL serves the new `index.html` + `/src/*.js` (curl 200). The "CDN 0%" bar is a display artifact; the
+server does not stream `cdn` progress. **Check the URL / exit code, not the bar.** What is broken:
+deep links 404 because `web/` has no `200.html` (Surge's SPA fallback); CI creates it via
+`cp index.html 200.html`, a manual publish does not.
+
+**Work:** 1) add `web/200.html` (copy of `index.html`); 2) add `.DS_Store` to `.surgeignore`;
+3) note the mirror rule in `web/README.md`; 4) verify deep links, 5) redeploy + curl.
+
+**RESULT:** done. `web/200.html` added (byte-identical to `index.html`), `.DS_Store` added to
+`.surgeignore`, README documents the mirror rule. Local deep-link check vs real backend: every route
+(`/library`, `/imports`, `/playlists`, `/notifications`, `/playlists/999`) now returns 200 and renders
+with 0 page errors. Redeployed to `simple3453t3fg4344.surge.sh`; live `/200.html` sha1
+`6dfcd9b…` matches local, and `/`, `/200.html`, `/library`, `/notifications` are all 200.
+
+**CLI behavior (why the user's publish "looked" broken):** the upload always lands; the readout is
+unreliable. Under a non-TTY pipe the CLI either hangs (progress-bar backpressure — our 150s timeout)
+or exits without printing anything. The server never closes the NDJSON stream predictably, so
+"Success!" is not guaranteed. **Verify by URL, never the bar**: `curl
+https://simple3453t3fg4344.surge.sh/200.html` + compare sha, or just check exit of a poll.
+Optionally wrap this in a tiny `web/deploy` script (not yet added).
+
+### 2026-10-09 — deploy wrapper because the CDN bar stalls (rule 1)
+
+The user hit the stuck "CDN: 0%" bar again. **Plan:** add `web/deploy.sh` that 1) writes a unique
+per-run marker `.deploymark`; 2) runs the real `surge publish . <domain>` in the background;
+3) polls `https://<domain>/.deploymark` for the token (ground truth — the bar lies); 4) if live →
+`OK`, exit 0; if the surge process dies → print its log tail and fail. Also add `web/.gitignore`
+(`.deploymark`, `.DS_Store`) so an interrupted run leaves no noise, and add `.gitignore` to
+`.surgeignore`. README gets a one-line usage note. RESULT below.
+
+**Result:** created (`web/deploy.sh`, `web/.gitignore`); README updated. First run timed out at 120s
+because the marker was a **dotfile** — the server will not serve dotted paths publicly, so
+`/.deploymark` fell through to the 200.html fallback and the token never appeared. Also found that a
+hang goes unnoticed because `ps` shows the job as `surge .` (not `surge publish`). Marker renamed to
+`__deploycheck` (non-dot; still unique per run, token match beats the fallback). **Rerun: OK** —
+`./web/deploy.sh` published and confirmed the marker on the live URL in seconds (exit 0), no stray
+`surge` process, deep links verified. The uploaded `__deploycheck` copy stays on the site between
+deploys (surge has no single-file delete; next run overwrites it).
+
+### 2026-10-09 — patch the raw `surge publish` CLI so it exits (rule 1)
+
+User ran plain `surge publish` (TTY): upload 100% → CDN 100% → **process stuck** (no "Success!"). The
+surge-stream fork (global install, well-commented local rewrite) waits for `res.on("end")`, but the
+publish API never closes the NDJSON response, and node 19+ default keep-alive agent parks the idle
+socket anyway. **Plan:** in
+`~/.nvm/…/surge/node_modules/surge-stream/lib/stream.js`: 1) send `Connection: close` so an
+honoring server ends the stream naturally (and the socket isn't pooled); 2) failsafe — when the
+`upload` progress frame hits 100%, if the stream hasn't ended within 5s, `res.destroy()` + emit
+`success` (upload=100% means the tar is fully received; CDN propagation is server-side and needs no
+live client). Success/fail/error paths cancel the failsafe. Then test with a pty (`script`) to match
+the user's run. **RESULT: fixed.** Patch applied to `stream.js` (global install under nvm). Tested the way
+the user runs it (pty via `script`, from `web/`): upload 100% → CDN 0% → **`Success! - Published to
+simple3453t3fg4344.surge.sh`** → process exited on its own, exit 0. Killed the user's old stuck
+process (pid 5616, hung since 09:16, deploy already live). Site verified live (`/`, `/library`,
+`/src/main.js` all 200). Note the patch lives in a global node_modules — an `npm install -g surge`
+or nvm reinstall will wipe it; `web/deploy.sh` remains the portable fallback.
+
+### 2026-10-09 — minimal `web/` instead of the CLI patch (rule 1)
+
+User doesn't like patching the global surge CLI. **Plan:** move the build-free app `web/` → `web-js/`
+(keeps index.html/200.html/styles.css/src/deploy.sh/.surgeignore/README/.github/.gitignore, untouched);
+rebuild `web/` as a 3-file smoke-test site: `200.html` (links only `/ui.js`, no styles/no other
+scripts), `ui.js` (standalone DOM helpers copied from `web-js/src/ui.js`), `CNAME`
+(`simple3453t3fg4344.surge.sh`). Verify the minimal site serves the two files locally. Do NOT deploy
+(that replaces the live app on the domain) unless asked. **RESULT: done.** `web/` → `web-js/` (full
+build-free app, untouched). New `web/` = 3 files: `200.html` (charset+title+favicon, `<script
+src="/ui.js">` only), `ui.js` (standalone DOM helpers, no imports, 605 B), `CNAME`
+(`simple3453t3fg4344.surge.sh`). Local check: `/200.html` served, `/ui.js` 200/605 B, html's only
+refs are favicon data: URI + `/ui.js`. Not deployed (would replace the live app).
+
+### 2026-10-09 — revert the CLI monkey patch; document it (rule 1)
+
+The `surge-stream` patch (Connection: close + upload-100% failsafe) was a **false positive**: it
+declared `success` on upload=100%, but that only proves the bytes were received — the original code
+(and the server) treat success as "an `info` verdict frame arrived". A failed deploy could be
+misreported as published. **Plan:** restore the global
+`~/.nvm/…/surge/node_modules/surge-stream/lib/stream.js` exactly (drop the `connection: close`
+header, the failsafe block, and the temp `SURGE_FRAME_LOG` debug line); document the whole attempt —
+the hang, why the patch was wrong, and the URL-verification path (`./deploy.sh`) — in
+`web-js/README.md` and this log. **RESULT: done.** `stream.js` restored to stock (no
+`Connection: close`, no upload-100% failsafe, no `SURGE_FRAME_LOG` debug line); `node --check`
+passes, no leftover patch markers. Attempt documented in `web-js/README.md` under a new
+"Surge CLI hang: a patch we tried and reverted" section, plus the web-layout note. This entry
+supersedes the "RESULT: fixed" patch entry above. Nothing committed (rule 5).
+
+### 2026-10-09 — minimal `web/` publish: upload 100%, no CDN bar, then hang (rule 1→2)
+
+User published the 3-file `web/` (200.html/ui.js/CNAME) from a fresh terminal: **upload 100%, no CDN
+line, process stuck**. Facts gathered: an `info`/`cdn` frame is not guaranteed on tiny publishes —
+upload=100% is the meaningful milestone (bytes received; the site updates server-side). The hang is
+the known stream-never-ends CLI issue. Surfaced a second bug: **surge.sh connectivity from this
+machine is intermittent** — curl to `simple3453t3fg4344.surge.sh` and `api.surge.sh` now times out
+(`code=000`, TCP connects then 0 bytes) while google.com is fine; earlier the same machine reached
+the publish API. So the deploy likely landed but could not be re-verified from here; user should
+confirm in a browser (`/ui.js` should be the 605 B esc/qsa/debounce module). Killed the stuck
+`surge publish` (pid 7805, safe post-upload). Nothing committed (rule 5).

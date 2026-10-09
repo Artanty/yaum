@@ -122,6 +122,6 @@ Match status: `matched` (score ≥ MATCH_ACCEPT 0.75) / `uncertain` (≥ 0.55) /
 - "Create a playlist from the library" is `POST /playlists` with `songIds` — one transaction
   (`store.createPlaylistWithSongs`), because create-then-add over HTTP leaves an empty playlist behind
   whenever the second call fails.
-- `web/src/app/core/library-api.ts` owns the song selection signal, deliberately NOT the library page
+- `web-angular/src/app/core/library-api.ts` owns the song selection signal, deliberately NOT the library page
   component: the songs resource is paged, so a page-held selection is rebuilt from the visible rows and
   page 1's ticks vanish when you press "next". Covered by `library-api.spec.ts`.
