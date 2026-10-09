@@ -1,0 +1,26 @@
+# Keep the published set to real site content.
+#
+# surge's built-in ignore (surge-ignore) already drops `.git`, every dotfile or
+# dot-directory (which covers `.env`, `.env.*`, `.github`, `.gitignore`,
+# `.surgeignore` and `.DS_Store`) and `node_modules`. The entries below are the
+# non-dotfile leftovers we never want to serve.
+#
+# `CNAME` is deliberately excluded: surge reads it as the project's *local*
+# domain identity (and writes one on success), but this workflow always passes
+# the domain explicitly, so a source CNAME would only be uploaded and served as
+# a stray file.
+.github
+.env
+.env.*
+CNAME
+*.md
+*.sh
+README.md
+temp-for-publish
+
+# Explicit belt-and-braces (already covered by the built-in `.*` rule).
+.git
+.gitignore
+.surgeignore
+.DS_Store
+node_modules

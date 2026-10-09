@@ -170,3 +170,68 @@ machine is intermittent** — curl to `simple3453t3fg4344.surge.sh` and `api.sur
 the publish API. So the deploy likely landed but could not be re-verified from here; user should
 confirm in a browser (`/ui.js` should be the 605 B esc/qsa/debounce module). Killed the stuck
 `surge publish` (pid 7805, safe post-upload). Nothing committed (rule 5).
+
+### 2026-10-09 — PLAN (rule 1): a self-contained Surge action inside `web/` (domain-or-placeholder)
+
+**Request:** add a GitHub Action under `web/` (it runs in the slave repo where `web/` *is* the repo
+root, so at run time the checkout is the site) plus `web/.surgeignore`. On push to `main`:
+1. read `SURGE_DOMAIN` from the root `.env`; if present and non-empty → publish the repo root to it.
+2. if it is missing/empty → write a throwaway `temp-for-publish/index.html` (`<h1>HELLO!</h1>`) and
+   publish *that* to `<SERVICE_EMAIL local-part>-<6 random chars>.surge.sh` using the token, then
+   **stop** (no commit) so the domain can be read from the action log and saved by hand.
+Also: `.surgeignore` to keep `.github` and `CNAME` (and `.env`, node_modules, `*.md`) out of the
+publish set.
+
+**Findings that shape it (read surge 0.44.5 source, not guessed):**
+- `surge <dir> <domain>` takes the domain from the second positional (`_shared/discovery.js`,
+  `_shorthand.js`), so the interactive `domain:` prompt never happens; credentials come from
+  `SURGE_TOKEN` in the environment (`_creds.js`) — **a token publish needs no `surge login`**.
+  Keep the expect driver only as a fallback for a `.env` that has email+password but no token.
+- surge reads `.surgeignore` from the *project* dir (`_shared/_size.js:47-51`). Its built-in defaults
+  (`surge-ignore/index.json`) already drop `.git`, `.*` (hence `.env`, `.github`, `.gitignore`) and
+  `node_modules`, but **`CNAME` is not a dotfile** — so it is uploaded unless listed. Excluding it
+  is the right call: surge treats `CNAME` as the project's local identity and its success handler
+  writes one *into* the publish dir (`deploy.js:307-309`), but we always pass the domain explicitly,
+  so a source `CNAME` would only be served as a stray file.
+- `web/` has no `index.html` (only `200.html` + `ui.js`); the root-publish branch will rely on
+  Surge's `200.html` SPA fallback for `/`. Noted, not silently "fixed".
+
+**Work:** 1) add `web/.surgeignore`; 2) add `web/.github/workflows/deploy-surge.yml` with the two
+branches + credential resolution; 3) YAML-lint it and exercise the branch logic with a fake `surge`;
+4) RESULT below. Nothing committed (rule 5).
+
+### RESULT — `web/.github/workflows/deploy-surge.yml` + `web/.surgeignore` added
+
+**Done, nothing committed (rule 5).** Two files:
+
+- `web/.surgeignore` — the publish set is site content only. Verified against surge's *real* ignore
+  engine (`surge-ignore` + `ignore`, the exact code `_size.js` and `surge-stream/lib/stream.js`
+  run): a fake slave root of `200.html`, `ui.js`, `CNAME`, `README.md`, `.env`, `.env.example`,
+  `.DS_Store`, `deploy.sh`, `.github/…`, `node_modules/…`, `.git/…`, `temp-for-publish/index.html`
+  publishes **only `200.html` + `ui.js`**. `.github`, `CNAME`, `.env*`, `*.md`, `*.sh`,
+  `temp-for-publish`, `node_modules` and the dotfiles are all out.
+- `web/.github/workflows/deploy-surge.yml` — `on: push: branches: [main]`, `contents: read`, a
+  15-min cap. Steps: resolve settings from `.env` → install surge (+expect) → write the expect
+  fallback → publish root-or-placeholder.
+
+**Branch logic exercised with a fake `surge` (step scripts extracted from the YAML):**
+
+- `.env` with `SURGE_DOMAIN="  spaced.surge.sh "` → resolves to `spaced.surge.sh`, runs
+  `surge . spaced.surge.sh` (branch 2).
+- `.env` without `SURGE_DOMAIN`, `SERVICE_EMAIL=user@example.com`, token → writes
+  `temp-for-publish/index.html` = `<h1>HELLO!</h1>` and runs `surge temp-for-publish
+  user-817087.surge.sh` (branch 3); a failing first publish retried with a fresh suffix; 5 failures
+  → step fails. There is no commit step, so the job stops right after (3.1); the domain is printed
+  both as a plain line and an `::notice::` annotation.
+- No `.env`/no creds → resolve exits 1 listing the `.env` **key names only** (never values).
+- `yaml.safe_load` passes; the expect driver is the same one proven in rounds 1-2.
+
+**Two things to flag:**
+
+1. **Excluding `CNAME` is right.** surge reads a source `CNAME` as the project's *local* domain
+   identity (`discovery.js:12`) and writes one on success (`deploy.js:307`), but we always pass the
+   domain as the 2nd positional, so a source CNAME would only be uploaded and served as a stray
+   file. No `CNAME` file is added for that reason.
+2. **`web/` has no `index.html`** (only `200.html` + `ui.js`), so branch 2 leans on Surge's
+   `200.html` SPA fallback for `/`. If `/` 404s live, add `cp 200.html index.html` before the publish
+   (or commit an `index.html`).

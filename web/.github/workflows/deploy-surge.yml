@@ -1,0 +1,221 @@
+name: Deploy web to Surge
+
+# This file lives in web/.github/ on purpose: GitHub only runs workflows from the
+# repo-root .github/workflows, so it executes in the "slave" repo that receives
+# web/ at its root. At run time the checkout IS the contents of web/, which is
+# why the publish target below is "." (the repo root).
+on:
+  push:
+    branches: [main]
+
+# Nothing is pushed back (no domain is committed), so read-only is enough.
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Publish to Surge
+    # The surge CLI is known to stall after a successful upload on some
+    # networks; a hard cap keeps a hang from burning the 6h default.
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # SURGE_DOMAIN is the switch:
+      #   set + non-empty -> publish the repo root to that domain
+      #   missing/empty   -> publish a placeholder to a generated domain
+      - name: Resolve deploy settings from .env
+        env:
+          SECRET_SURGE_TOKEN: ${{ secrets.SURGE_TOKEN }}
+          SECRET_SERVICE_EMAIL: ${{ secrets.SERVICE_EMAIL }}
+          SECRET_SERVICE_PASSWORD: ${{ secrets.SERVICE_PASSWORD }}
+        run: |
+          # Read KEY=value out of the root .env without ever echoing a value.
+          # The generated .env can repeat keys, so take the first match only.
+          env_get() {
+            [ -f .env ] || { printf ''; return 0; }
+            grep -E "^$1=" .env | head -1 | cut -d '=' -f2- | tr -d '\r' || true
+          }
+
+          SURGE_DOMAIN="$(env_get SURGE_DOMAIN | tr -d '[:space:]"')"
+
+          # Credentials: a repo secret wins when present, otherwise .env. The
+          # generated .env normally carries them; the secrets are an override.
+          SERVICE_EMAIL="${SECRET_SERVICE_EMAIL:-$(env_get SERVICE_EMAIL)}"
+          SERVICE_PASSWORD="${SECRET_SERVICE_PASSWORD:-$(env_get SERVICE_PASSWORD)}"
+          SURGE_TOKEN="${SECRET_SURGE_TOKEN:-$(env_get SURGE_TOKEN)}"
+
+          if [ -n "$SURGE_DOMAIN" ]; then
+            echo "SURGE_DOMAIN is set in .env -> publishing the repo root to $SURGE_DOMAIN"
+          else
+            echo "SURGE_DOMAIN is missing/empty in .env -> publishing a placeholder to a generated domain"
+          fi
+
+          if [ -z "$SURGE_TOKEN" ] && { [ -z "$SERVICE_EMAIL" ] || [ -z "$SERVICE_PASSWORD" ]; }; then
+            echo "No usable surge credentials: SURGE_TOKEN is empty and SERVICE_EMAIL/SERVICE_PASSWORD are not both set."
+            if [ -f .env ]; then
+              echo ".env is present; key names: $(grep -oE '^[A-Za-z_]+' .env | sort -u | tr '\n' ' ')"
+            else
+              echo ".env is NOT in the checkout."
+            fi
+            exit 1
+          fi
+
+          {
+            echo "SURGE_DOMAIN=$SURGE_DOMAIN"
+            echo "SERVICE_EMAIL=$SERVICE_EMAIL"
+            echo "SERVICE_PASSWORD=$SERVICE_PASSWORD"
+            echo "SURGE_TOKEN=$SURGE_TOKEN"
+          } >> "$GITHUB_ENV"
+
+      - name: Install surge (and expect for the password fallback)
+        run: |
+          npm install -g surge
+          # expect is only used when there is no SURGE_TOKEN; surge's prompts
+          # come from the `read` package and need a pty.
+          if ! command -v expect >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq expect
+          fi
+
+      # Fallback path only: when .env has email+password but no token, surge
+      # still has to answer its own `email:`/`password:` prompts on a pty.
+      - name: Write the expect driver for surge's prompts
+        run: |
+          cat > "$RUNNER_TEMP/surge.exp" <<'EOF'
+          #!/usr/bin/expect -f
+          set timeout 600
+          set tries(email) 0
+          set tries(password) 0
+          set asked(domain) 0
+
+          spawn {*}$argv
+
+          expect {
+              -re {email:} {
+                  if {![info exists env(SERVICE_EMAIL)] || $env(SERVICE_EMAIL) eq ""} {
+                      puts "\nsurge.exp: surge asked for an email but SERVICE_EMAIL is empty"
+                      exit 1
+                  }
+                  incr tries(email)
+                  if {$tries(email) > 3} {
+                      puts "\nsurge.exp: surge kept asking for an email - check SERVICE_EMAIL"
+                      exit 1
+                  }
+                  puts "\nsurge.exp: answering the email prompt"
+                  send -- "$env(SERVICE_EMAIL)\r"
+                  exp_continue
+              }
+              -re {password:} {
+                  if {![info exists env(SERVICE_PASSWORD)] || $env(SERVICE_PASSWORD) eq ""} {
+                      puts "\nsurge.exp: surge asked for a password but SERVICE_PASSWORD is empty"
+                      exit 1
+                  }
+                  incr tries(password)
+                  if {$tries(password) > 3} {
+                      puts "\nsurge.exp: surge refused the password three times - check SERVICE_PASSWORD"
+                      exit 1
+                  }
+                  puts "\nsurge.exp: answering the password prompt"
+                  send -- "$env(SERVICE_PASSWORD)\r"
+                  exp_continue
+              }
+              -re {forgot\?} {
+                  # surge's own default here is "yes" - that mails a password
+                  # reset. clear the line (ctrl-u) and decline instead.
+                  send -- "\x15no\r"
+                  exp_continue
+              }
+              -re {domain:} {
+                  if {!$asked(domain)} {
+                      set asked(domain) 1
+                      puts "\nsurge.exp: answering the domain prompt with surge's suggestion"
+                      send -- "\r"
+                  }
+                  exp_continue
+              }
+              timeout {
+                  puts "\nsurge.exp: no answer from surge for ${timeout}s - giving up"
+                  exit 124
+              }
+              eof {}
+          }
+
+          catch wait result
+          if {[llength $result] >= 4 && [lindex $result 2] == 0} {
+              exit [lindex $result 3]
+          }
+          exit 1
+          EOF
+
+          cat > "$RUNNER_TEMP/surge-run" <<'EOF'
+          #!/usr/bin/env bash
+          exec expect "$RUNNER_TEMP/surge.exp" surge "$@"
+          EOF
+          chmod +x "$RUNNER_TEMP/surge-run"
+
+      # Branch 2: a domain is configured -> publish the repo root to it.
+      # .surgeignore keeps .github/.env/CNAME/node_modules out of the upload.
+      - name: Publish the repo root to Surge
+        if: env.SURGE_DOMAIN != ''
+        run: |
+          publish() {
+            if [ -n "$SURGE_TOKEN" ]; then
+              surge "$1" "$2"
+            else
+              "$RUNNER_TEMP/surge-run" "$1" "$2"
+            fi
+          }
+
+          echo "Publishing the repo root ('.') to $SURGE_DOMAIN"
+          publish . "$SURGE_DOMAIN"
+          echo "::notice title=Surge deploy::Published the repo root to https://$SURGE_DOMAIN"
+
+      # Branch 3: no domain -> publish a throwaway page to a generated domain,
+      # then stop. The domain is printed so it can be copied into the creds.
+      - name: Publish a placeholder to a generated domain
+        if: env.SURGE_DOMAIN == ''
+        run: |
+          publish() {
+            if [ -n "$SURGE_TOKEN" ]; then
+              surge "$1" "$2"
+            else
+              "$RUNNER_TEMP/surge-run" "$1" "$2"
+            fi
+          }
+
+          # <SERVICE_EMAIL local-part>-<6 random digits>.surge.sh
+          local_part="$(printf '%s' "$SERVICE_EMAIL" | cut -d '@' -f1 \
+            | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')"
+          [ -n "$local_part" ] || local_part="hello"
+
+          mkdir -p temp-for-publish
+          cat > temp-for-publish/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+            <head>
+              <meta charset="utf-8" />
+              <title>HELLO!</title>
+            </head>
+            <body>
+              <h1>HELLO!</h1>
+            </body>
+          </html>
+          HTML
+
+          for attempt in 1 2 3 4 5; do
+            suffix="$(printf '%06d' "$(( (RANDOM * 32768 + RANDOM) % 1000000 ))")"
+            domain="${local_part}-${suffix}.surge.sh"
+            echo "Attempt $attempt: publishing temp-for-publish/ to $domain"
+            if publish temp-for-publish "$domain"; then
+              echo "::notice title=Surge placeholder published::Placeholder is live at https://$domain - save this domain to the deploy creds (.env SURGE_DOMAIN)."
+              echo "PUBLISHED_PLACEHOLDER_DOMAIN=$domain" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "$domain was rejected; retrying with a new random suffix"
+          done
+
+          echo "Gave up: no generated domain could be published - see the surge output above."
+          exit 1
