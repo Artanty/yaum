@@ -5,18 +5,15 @@
 # `.surgeignore` and `.DS_Store`) and `node_modules`. The entries below are the
 # non-dotfile leftovers we never want to serve.
 #
-# `CNAME` is deliberately excluded: surge reads it as the project's *local*
-# domain identity (and writes one on success), but this workflow always passes
-# the domain explicitly, so a source CNAME would only be uploaded and served as
-# a stray file.
+# `CNAME` is intentionally NOT ignored: the workflow writes it (from
+# SURGE_DOMAIN) before every publish, so surge sees the same domain identity
+# it would write on success.
 .github
 .env
 .env.*
-CNAME
 *.md
 *.sh
 README.md
-temp-for-publish
 
 # Explicit belt-and-braces (already covered by the built-in `.*` rule).
 .git

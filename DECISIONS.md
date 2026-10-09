@@ -7,6 +7,55 @@ Current thread only. Prior sessions: `DECISIONS-archive.md`.
 workflow rounds), and archived on 2026-10-09: the React port (2026-10-07) and the header-styles fix
 (2026-10-08). This file holds the Surge static-deploy probe.)*
 
+## 2026-10-09 — PLAN (rule 1): simplify `web/.github/workflows/deploy-surge.yml` → domain required, CNAME, deploy
+
+**Request:** 1) no domain in envs → stop and **fail** the deploy (no placeholder branch);
+2) domain present → write a `CNAME` file with it at the repo root; 2.1) publish to surge;
+remove all other code from the workflow.
+
+**Approach:** rewrite `web/.github/workflows/deploy-surge.yml` to 5 short steps — checkout;
+resolve `SURGE_DOMAIN` (secret override, else `.env`; empty → `::error` + exit 1); write
+`CNAME` (domain + newline); `npm install -g surge`; publish `.` to `$SURGE_DOMAIN` with
+`SURGE_TOKEN` (secret else `.env`, missing → fail; the expect/email-password fallback and the
+placeholder-domain branch are deleted). Drop `CNAME` (and `temp-for-publish`) from
+`.surgeignore` so the file we now create actually ships — consistent with surge's own success
+handler, which writes a CNAME. Verify: yaml parse + run the resolve/CNAME steps locally against
+a fake `.env` (both branches), fake `surge` for the publish step. Nothing committed (rule 5).
+
+### RESULT — workflow simplified: domain required → CNAME → deploy
+
+**Done, nothing committed (rule 5).** `web/.github/workflows/deploy-surge.yml` is now 5 steps:
+checkout → resolve `SURGE_DOMAIN` (secret `SURGE_DOMAIN` wins, else `.env`; whitespace/quotes
+stripped; **empty → `::error` + exit 1, deploy fails**) → write `CNAME` (domain + newline, at the
+repo root) → `npm install -g surge` → `surge . "$SURGE_DOMAIN"` with `SURGE_TOKEN` (secret else
+`.env`, missing → fail). **Deleted:** the placeholder-domain branch (incl. `temp-for-publish`,
+the random-suffix retry loop), the expect driver + email/password fallback, and the
+`SERVICE_EMAIL`/`SERVICE_PASSWORD` plumbing. `.surgeignore`: dropped `CNAME` (we now write it
+deliberately) and `temp-for-publish`.
+
+**Verified** by extracting the step scripts from the YAML (yaml `safe_load` passes) and running
+them locally with a fake `.env` + fake `surge`: no `.env` → fail (exit 1); empty `SURGE_DOMAIN` →
+fail listing key names; valid domain → resolve, `CNAME=my-app.surge.sh`, fake surge called as
+`surge . my-app.surge.sh`; domain but no token → fail; secret overrides `.env`. Caveat found and
+dismissed: `https://…surge.sh/` in `.env` passes through unstripped — same as the old behavior.
+
+`DECISIONS.md` is at ~250 lines — flag for trimming/archiving (rule 4).
+
+## 2026-10-09 — PLAN (rule 1): drop repo-secret overrides from the surge workflow
+
+**Request:** no GitHub repo secrets exist — credentials/domain come only from the `.env` file.
+Remove the redundant `secrets.SURGE_DOMAIN` / `secrets.SURGE_TOKEN` plumbing from
+`web/.github/workflows/deploy-surge.yml`; read both keys from `.env` only. RESULT below.
+
+### RESULT — repo-secret overrides removed; `.env` is the only source
+
+**Done, nothing committed (rule 5).** `web/.github/workflows/deploy-surge.yml`: dropped both
+`env: SECRET_SURGE_*: ${{ secrets.* }}` blocks — `SURGE_DOMAIN` and `SURGE_TOKEN` are now read
+from `.env` only (`env_get`, first match, value never echoed). Error messages updated to name
+`.env` instead of mentioning secrets. `grep 'secrets\.'` → no references left. Re-verified:
+YAML parses; the extracted step scripts pass all 5 harness cases (no `.env` → fail, empty domain
+→ fail, good domain → `CNAME=[my-app.surge.sh]` + `surge . my-app.surge.sh`, no token → fail).
+
 ## 2026-10-09 — PLAN (rule 1): Surge deploy fails on the big React bundle → move React to `web-react`, put a build-free pure-JS app in `web`
 
 **Report/experiment:** publishing the built React app to Surge fails; deleting every file but one and

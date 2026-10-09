@@ -1,15 +1,9 @@
 {
   "name": "plst-web",
-  "version": "0.0.9",
-  "scripts": {
-    
-  },
+  "version": "0.0.10",
+  "scripts": {},
   "private": true,
   "packageManager": "npm@10.8.2",
-  "dependencies": {
-
-  },
-  "devDependencies": {
-    
-  }
+  "dependencies": {},
+  "devDependencies": {}
 }
