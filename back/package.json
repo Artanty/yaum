@@ -1,6 +1,6 @@
 {
   "name": "plst",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "description": "Yandex Music -> YouTube Music playlist converter (links)",
   "type": "module",
   "engines": {
