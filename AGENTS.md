@@ -9,6 +9,8 @@
    At ~250 lines, move everything except the current thread into `DECISIONS-archive.md` (done once on
    2026-09-29: 455 -> 115 lines) and leave a one-line pointer in `DECISIONS.md`.
 5. **Never commit unless the user explicitly asks** — do the work, leave changes uncommitted/staged, and stop.
+6. **Commit messages are a plain imperative subject** — never append `-d` or `-d;` (nor any other
+   suffix token). Just the sentence describing the change.
 
 ## Bug reports: read the logs FIRST
 

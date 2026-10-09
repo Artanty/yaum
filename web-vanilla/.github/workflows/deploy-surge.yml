@@ -2,8 +2,7 @@ name: Deploy web to Surge
 
 # This file lives in web/.github/ on purpose: GitHub only runs workflows from the
 # repo-root .github/workflows, so it executes in the "slave" repo that receives
-# web/ at its root. The checkout IS the source; vite builds it to ./dist and that
-# is the publish target.
+# web/ at its root. The checkout IS the site; the publish target is "./".
 on:
   push:
     branches: [main]
@@ -51,44 +50,35 @@ jobs:
           echo "SURGE_TOKEN=$SURGE_TOKEN" >> "$GITHUB_OUTPUT"
           echo "BACK_URL=$BACK_URL" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      # The committed config.ts is whatever the dev machine last used (usually
-      # an empty/local value). Prod must not ship that: paste the .env BACK_URL
-      # over the API_BASE literal BEFORE the build, so vite bakes the real
-      # backend origin into the bundle.
+      # The committed config.js is whatever the dev machine last used (usually a
+      # localhost value). Prod must not ship that: paste the .env BACK_URL over
+      # the API_BASE literal so the deployed site calls the real backend.
       # (tmp+mv instead of `sed -i`: BSD sed wants `-i ''`, GNU sed wants `-i`,
       #  and this step is also exercised locally.)
-      - name: Inject BACK_URL into src/config.ts
+      - name: Inject BACK_URL into src/config.js
         env:
           BACK_URL: ${{ steps.env.outputs.BACK_URL }}
         run: |
           esc=$(printf '%s' "$BACK_URL" | sed -e 's/[\\&|]/\\&/g')
           tmp=$(mktemp)
-          sed "s|^export const API_BASE = .*|export const API_BASE = '$esc';|" src/config.ts > "$tmp"
-          mv "$tmp" src/config.ts
+          sed "s|^export const API_BASE = .*|export const API_BASE = '$esc';|" src/config.js > "$tmp"
+          mv "$tmp" src/config.js
 
-          if ! grep -qF "export const API_BASE = '$BACK_URL';" src/config.ts; then
-            echo "::error title=Surge deploy failed::could not inject BACK_URL into src/config.ts (API_BASE line not found/rewritten)."
+          if ! grep -qF "export const API_BASE = '$BACK_URL';" src/config.js; then
+            echo "::error title=Surge deploy failed::could not inject BACK_URL into src/config.js (API_BASE line not found/rewritten)."
             exit 1
           fi
-          echo "src/config.ts API_BASE <- $BACK_URL"
+          echo "src/config.js API_BASE <- $BACK_URL"
 
-      - name: Build React app
-        run: npm run build
-
-      # surge's SPA fallback is `200.html`; keep it a byte-copy of the built index.
-      # CNAME goes next to it — the publish target is dist/.
+      # surge's SPA fallback is `200.html`; keep it a byte-copy of index.html.
       - name: Write CNAME and 200.html
         run: |
-          echo "${{ steps.env.outputs.SURGE_DOMAIN }}" > dist/CNAME
-          cp dist/index.html dist/200.html
+          echo "${{ steps.env.outputs.SURGE_DOMAIN }}" > CNAME
+          cp index.html 200.html
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
       - run: npm install -g surge
 
@@ -96,4 +86,4 @@ jobs:
         env:
           SURGE_DOMAIN: ${{ steps.env.outputs.SURGE_DOMAIN }}
           SURGE_TOKEN: ${{ steps.env.outputs.SURGE_TOKEN }}
-        run: surge ./dist "$SURGE_DOMAIN" --token "$SURGE_TOKEN"
+        run: surge ./ "$SURGE_DOMAIN" --token "$SURGE_TOKEN"

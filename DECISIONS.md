@@ -25,6 +25,53 @@ this in an effect"), `web-angular/.../playlist-detail.ts` ("the 15s poll is retr
 (bundle in `dist/app`); `web` (vanilla): `main.js` imports without SyntaxError (runtime stops at
 `localStorage is not defined`, expected outside a browser).
 
+### RESULT (rule 2): rule added — no `-d` suffix in commit messages
+
+`AGENTS.md` gained **rule 6**: commit messages are a plain imperative subject, never with a
+trailing `-d` / `-d;` suffix (or any other suffix token). Applies from the next commit onward;
+past commits keep their messages. Nothing else touched — the rename/workflow work is still
+staged and uncommitted (rule 5).
+
+## 2026-10-09 — PLAN (rule 1): new rule — no `-d` suffix in commit messages
+
+**Request:** "dont append to commit message `-d`. write it in rules."
+
+**Approach:** add it as a numbered rule in root `AGENTS.md` (the rules file), next to the commit
+rule (5) since it's about commits: commit messages are a plain imperative subject, never with a
+trailing `-d` / `-d;` suffix (that suffix came from older messages — stop it going forward).
+Result entry afterwards. Nothing else changed; staged rename/workflow work still uncommitted
+(rule 5).
+
+### RESULT (rule 2): commit + web→web-vanilla / web-react→web + react workflow on the vanilla pattern
+
+**Done.** (1) Committed the poll-removal work as `39bb4f0 "stop periodic 15s page refresh in all
+three frontends -d;"` (hook pushed + tagged `v1.0.14.0.0.15`). (2) Renames done with `git mv`
+(history follows): `web/` → `web-vanilla/`, `web-react/` → `web/` — 61 staged paths; verified
+on disk (React's `vite.config.ts`/`src/core/http.ts` under `web/`, vanilla's `config.js`/
+`200.html` under `web-vanilla/`, both `.github/workflows/` intact); zero `web-react` string
+references left anywhere outside this log. (3) React prod API-base parity: new
+`web/src/config.ts` (`export const API_BASE = '';` — same line format so the vanilla sed pattern
+works verbatim on `.ts`), `web/src/core/http.ts` gained `normalizeBase()` + `` fetch(`${BASE}${path}`) ``
++ hardened `errorText()` (HTML-page detection naming `src/config.ts`, 300-char truncation —
+mirrors vanilla `api.js`); `http.spec.ts` extended (6 new tests). (4) `web/.github/workflows/
+deploy-surge.yml` fully rewritten from the 240-line expect/secrets/version-commit monster to the
+vanilla pattern: Read .env (3 keys, each missing → `::error`+exit 1) → setup-node+npm ci →
+**Inject BACK_URL into src/config.ts before build** → `npm run build` → CNAME+200.html into
+`dist/` → `surge ./dist "$SURGE_DOMAIN" --token "$SURGE_TOKEN"`; `permissions: contents: read`;
+`.env.example` now lists the 3 new keys.
+**Verified:** YAML parses; extracted steps in a temp dir: no `.env`/no `BACK_URL` → exit 1 naming
+the key, full `.env` → `SURGE_DOMAIN=my-app.surge.sh`+`BACK_URL` outputs; inject cases 4-9 all
+pass (over `''`, idempotent, re-inject, `&`/`?` URL, missing line → exit 1, file intact);
+`npm test` **48/48**; `tsc --noEmit` clean; end-to-end bake: inject → `npm run build` →
+`bake-test.example.com` found in `dist/assets/index-*.js` → CNAME/200.html step works on `dist/`
+→ `config.ts` restored to `''`.
+**Flags (rule 4):** DECISIONS.md was ~560 lines before this entry — far past the ~250 threshold;
+recommend archiving to DECISIONS-archive.md. **Open:** vite dev proxy still defaults to
+`http://127.0.0.1:8000` (`vite.config.ts`, override via `PLST_API`) while back/.env says
+PORT=3218 — react dev needs `PLST_API=http://127.0.0.1:3218` or a default change (not asked, not
+done). **Rename/workflow changes are staged but NOT committed** — the explicit "commit changes"
+instruction preceded them (rule 5); say "commit" and they go in.
+
 ## 2026-10-09 — PLAN (rule 1): commit poll-removal; rename web→web-vanilla, web-react→web; react workflow ← vanilla pattern
 
 **Requests (one message):** "commit changes." / "move current web folder → web-vanilla" /
