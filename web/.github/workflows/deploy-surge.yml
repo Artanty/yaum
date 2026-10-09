@@ -22,14 +22,16 @@ jobs:
       - uses: actions/checkout@v4
 
       # .env is the only source: HOSTING_DEPLOYMENT_URL (full URL ->
-      # https://my-app.surge.sh/ becomes my-app.surge.sh) and SURGE_TOKEN.
-      # Either missing -> fail.
+      # https://my-app.surge.sh/ becomes my-app.surge.sh), SURGE_TOKEN, and
+      # BACK_URL (the public backend origin the deployed site will call).
+      # Any of them missing -> fail.
       - name: Read .env file
         id: env
         run: |
           SURGE_DOMAIN=$(grep '^HOSTING_DEPLOYMENT_URL=' .env 2>/dev/null | head -1 | cut -d '=' -f2- | tr -d '\r[:space:]"' \
             | sed -E 's#^[a-zA-Z]+://##; s#/.*$##')
           SURGE_TOKEN=$(grep '^SURGE_TOKEN=' .env 2>/dev/null | head -1 | cut -d '=' -f2- | tr -d '\r[:space:]"')
+          BACK_URL=$(grep '^BACK_URL=' .env 2>/dev/null | head -1 | cut -d '=' -f2- | tr -d '\r[:space:]"')
 
           if [ -z "$SURGE_DOMAIN" ]; then
             echo "::error title=Surge deploy failed::HOSTING_DEPLOYMENT_URL is missing/empty in .env; refusing to deploy."
@@ -39,13 +41,40 @@ jobs:
             echo "::error title=Surge deploy failed::SURGE_TOKEN is missing/empty in .env; refusing to deploy."
             exit 1
           fi
+          if [ -z "$BACK_URL" ]; then
+            echo "::error title=Surge deploy failed::BACK_URL is missing/empty in .env; refusing to deploy."
+            exit 1
+          fi
 
           echo "SURGE_DOMAIN=$SURGE_DOMAIN" >> "$GITHUB_OUTPUT"
           echo "SURGE_TOKEN=$SURGE_TOKEN" >> "$GITHUB_OUTPUT"
+          echo "BACK_URL=$BACK_URL" >> "$GITHUB_OUTPUT"
 
-      # surge serves the SPA fallback from `200.html`; CNAME names the domain.
-      - name: Write CNAME
-        run: echo "${{ steps.env.outputs.SURGE_DOMAIN }}" > CNAME
+      # The committed config.js is whatever the dev machine last used (usually a
+      # localhost value). Prod must not ship that: paste the .env BACK_URL over
+      # the API_BASE literal so the deployed site calls the real backend.
+      # (tmp+mv instead of `sed -i`: BSD sed wants `-i ''`, GNU sed wants `-i`,
+      #  and this step is also exercised locally.)
+      - name: Inject BACK_URL into src/config.js
+        env:
+          BACK_URL: ${{ steps.env.outputs.BACK_URL }}
+        run: |
+          esc=$(printf '%s' "$BACK_URL" | sed -e 's/[\\&|]/\\&/g')
+          tmp=$(mktemp)
+          sed "s|^export const API_BASE = .*|export const API_BASE = '$esc';|" src/config.js > "$tmp"
+          mv "$tmp" src/config.js
+
+          if ! grep -qF "export const API_BASE = '$BACK_URL';" src/config.js; then
+            echo "::error title=Surge deploy failed::could not inject BACK_URL into src/config.js (API_BASE line not found/rewritten)."
+            exit 1
+          fi
+          echo "src/config.js API_BASE <- $BACK_URL"
+
+      # surge's SPA fallback is `200.html`; keep it a byte-copy of index.html.
+      - name: Write CNAME and 200.html
+        run: |
+          echo "${{ steps.env.outputs.SURGE_DOMAIN }}" > CNAME
+          cp index.html 200.html
 
       - uses: actions/setup-node@v4
         with:
