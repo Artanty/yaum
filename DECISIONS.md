@@ -7,6 +7,196 @@ Current thread only. Prior sessions: `DECISIONS-archive.md`.
 workflow rounds), and archived on 2026-10-09: the React port (2026-10-07) and the header-styles fix
 (2026-10-08). This file holds the Surge static-deploy probe.)*
 
+## 2026-10-09 — PLAN (rule 1): run the backend on port 3218
+
+**Request:** backend must work on port 3218; do NOT touch the Postman collection (its
+`PLST_back_domain` variable is the user's to set — the file stays as-is).
+
+**Approach:** port comes from `process.env.PORT ?? 8000` (`src/server.ts:263`); `back/.env`
+pins `PORT=8000` → change that one line to `PORT=3218` (no code change). A server is already
+running on :8000 (pids 33201/33227/33228) — restart it so it picks up the new port. MySQL alive.
+Verify `/healthz`, `/api/library/healthz` and one `x-user-id` route on **:3218**, confirm :8000
+stops listening. Note for the user: set `PLST_back_domain = http://127.0.0.1:3218` in Postman.
+RESULT below.
+
+### RESULT — backend runs on port 3218; collection untouched
+
+**Done, nothing committed (rule 5).** `back/.env`: `PORT=8000` → `PORT=3218` (one line; no code
+change — `src/server.ts:263` reads `process.env.PORT ?? 8000`). The already-running server
+(`npm exec tsx src/server.ts`, pids 33201/33227/33228 on :8000) was killed and restarted via
+`npm start` in the background so it picked up the new port. **Verified live:** listener on
+`*:3218` (pid 33621), **:8000 free**; `GET /healthz` → `{ok:true, yandex_configured:true,…}`;
+`GET /api/library/healthz` → ok; `GET /api/library/me` with `x-user-id: 1` → Artyom, 2 songs,
+`pendingImports:1`; `/api/library/users` → both users; missing header → **400** as designed.
+The Postman collection was **not modified** (shasum unchanged) — per request, its
+`PLST_back_domain` default stays `http://127.0.0.1:8000`; **the user sets
+`PLST_back_domain = http://127.0.0.1:3218` in Postman** to hit this server.
+
+### RESULT — `BACK_URL` injected from `.env` into `src/config.js` by CI
+
+**Done, nothing committed (rule 5).** `web/.github/workflows/deploy-surge.yml` gained two
+pieces: (a) *Read .env* now also reads **`BACK_URL`** (trimmed; missing/empty → `::error` +
+exit 1, same fail-fast as domain/token) and passes it as a step output; (b) new step
+**"Inject BACK_URL into src/config.js"** — `esc`apes `\ & |`, rewrites the
+`export const API_BASE = …` line via sed into a temp file + `mv` (**not `sed -i`**: BSD sed wants
+`-i ''`, GNU sed wants `-i` — this bit the first test run on macOS), then `grep -qF` the exact
+resulting line and fails loudly if the rewrite didn't land; echoes `API_BASE <- <url>` (public
+URL, not a secret). `web/src/config.js` doc comment now says CI overwrites the value from
+`BACK_URL` and that the committed value is only the local-dev default.
+**Verified** (YAML parses; extracted steps run against a temp copy of `web/`): no `.env` → fail;
+`.env` without `BACK_URL` → fail naming the key; full `.env` → `BACK_URL` in outputs; inject over
+the localhost default → `'https://api.example.com'`; idempotent re-run; new URL over injected
+value; URL containing `&`/`?` survives; missing API_BASE line → exit 1 with `::error`; file stays
+16 lines (rest intact). Injected values all pass `normalizeBase` unchanged. Real
+`web/src/config.js` untouched (still `http://localhost:3218`), temp dir cleaned up.
+
+## 2026-10-09 — PLAN (rule 1): inject `BACK_URL` from `.env` into `src/config.js` during CI deploy
+
+**Request:** prod provides the backend URL as a `BACK_URL` env in the same `.env` file the other
+keys live in; add a GH-action step that pastes that value into the appropriate file
+(`web/src/config.js` → `API_BASE`).
+
+**Approach:** new workflow step **"Inject BACK_URL into src/config.js"** between *Read .env* and
+*Write CNAME and 200.html*: grep `BACK_URL` from `.env` (quotes/whitespace trimmed);
+**missing/empty → `::error` + exit 1** (same fail-fast contract as domain/token — a prod site
+with no API base is as broken as one with no domain); `sed -i` replace the
+`export const API_BASE = …` line (delimiter `|`, escape `\ & |`), then grep the line back and
+echo it (a public URL, not a secret). `src/config.js` doc comment updated to say CI overwrites
+the value from `BACK_URL`. Verify: YAML parses; run the extracted step against a **temp copy**
+of `web/` with a fake `.env` (present → rewritten correctly; absent → exit 1); confirm the
+injected value survives `normalizeBase`. Nothing committed (rule 5).
+
+### RESULT — API_BASE typo fixed + normalizer added; live on :3218
+
+**Done, nothing committed (rule 5).**
+1. `web/src/config.js`: `'http:localhost:3218'` → `'http://localhost:3218'` (the missing `//`
+   made fetch treat `localhost:3218/…` as a **path**, producing the observed
+   `http://localhost:8000/localhost:3218/api/library/me`).
+2. `web/src/api.js`: new exported `normalizeBase()` applied once at module load → `BASE`.
+   Handles: `''` → same-origin; scheme-less `localhost:3218` → `http://…`; `http:foo` →
+   `http://foo`; trailing slashes stripped. So both likely typos yield the intended URL instead
+   of a silent path-join. `fetch` now uses `` `${BASE}${path}` ``.
+**Verified:** normalizer unit check **7/7**; live `apiFetch` against the running backend on
+**:3218** — `me` → Artyom (`librarySongs:2, pendingImports:1`), `users` → artyom/zaur,
+`songs.total:2`; browser-style cross-origin check from `http://localhost:8000`: preflight
+**204**, `access-control-allow-headers: x-user-id`, `allow-origin: http://localhost:8000`.
+Note: my own `npm start` duplicate exited with `EADDRINUSE` (user already had pid 34086 on
+:3218) — harmless, single server confirmed serving afterwards; no stray process left.
+
+## 2026-10-09 — PLAN (rule 1): fix broken API_BASE (`http:localhost:3218` → malformed URL)
+
+**Bug report:** user set API_BASE, browser requests `http://localhost:8000/localhost:3218/api/...`.
+**Cause (read, not guessed):** `web/src/config.js` has `'http:localhost:3218'` — no `//`, so
+`fetch(API_BASE + path)` resolves it as a path against the page origin.
+
+**Approach:** 1) fix the value to `'http://localhost:3218'`; 2) harden `api.js` — normalize the
+base once at module load: scheme-less (`localhost:3218`) → prepend `http://`, missing `//` after
+`http:`/`https:` → insert it, trailing slashes stripped; `''` still means same-origin. So both
+likely typos become the URL the user meant instead of a silent path-join. 3) verify: unit-style
+check of the normalizer (all 3 shapes), then live — backend `npm start` (:3218 was killed last
+turn), `apiFetch('/api/library/me', {userId:1})` returns Artyom's JSON. Nothing committed (rule 5).
+
+## 2026-10-09 — RESULT — port 3218 killed
+
+Server stopped on request: `pkill -f 'tsx src/server.ts'` (pid 33621). **3218 free, no server
+process left.** The shutdown log line was flushed (`shutdown (SIGTERM)` with `skippedPolls:4,
+loggedRequests:1`) — visible in the background shell output. Restart with `npm start` in `back/`
+when needed (`.env` still says `PORT=3218`).
+
+## 2026-10-09 — PLAN (rule 1): Postman collection for debugging the backend
+
+**Request:** create a Postman collection for debugging the backend; base URL as
+`{{PLST_back_domain}}` instead of a literal origin.
+
+**Approach:** `back/postman/plst.postman_collection.json` (schema v2.1) with collection-level
+variables `PLST_back_domain` (default `http://127.0.0.1:8000`) and `user_id` (feeds the
+`x-user-id` header most library routes require). Every route read from source — `server.ts`
+(system + converter) and `library/routes.ts` (all 35 library routes) — grouped: System,
+Converter jobs, Session, Logs, Scan & Imports, Songs, Facets, Playlists, Items & sharing,
+YouTube matching/export, Notifications. Request bodies/examples taken from the actual handlers
+(`{tracks:[…]}` scan shape, form-urlencoded migrate, etc.); descriptions note status codes and
+gotchas (303 on migrate, 400/404 semantics, 50-song match cap). Verify: JSON parses, spot-check
+against routes with a script. RESULT below.
+
+### RESULT — Postman collection created
+
+**Done, nothing committed (rule 5).** `back/postman/plst.postman_collection.json` — schema v2.1,
+**37 requests in 9 folders** (System, Converter jobs, Session, Logs, Scan & Imports, Songs &
+matching, Facets, Playlists, Playlist items & sharing, Notifications). Collection variables:
+`PLST_back_domain` (default `http://127.0.0.1:8000`) and `user_id` (feeds the `x-user-id` header).
+All bodies/queries/semantics read from `server.ts` + `library/routes.ts`, documented per request
+(303 on migrate, 404-not-403 for "not yours", 50-song match cap, scan shapes/limits, form vs JSON
+content types).
+
+**Verified** by script: JSON parses; **every one of the 35 source routes is in the collection and
+there are no phantom routes** (extracted via regex from both TS files, paths normalized); all 37
+URLs start with `{{PLST_back_domain}}` — no literal origin (the only literal URLs are the variable
+default and example payloads like the Yandex album URL). 37 > 35 because `/job/:id` and
+`/export/youtube` each appear twice (format variants). Fixed one typo found while verifying (the
+unshare URL was missing `/playlists`).
+
+## 2026-10-09 — PLAN (rule 1): fix the surge site — API base config + no HTML dumps + `200.html`
+
+**Bug report (user):** deployed `web/` to surge; console shows 404s and the page shows
+`could not load the library: <!DOCTYPE html>…` (surge's "page not found" HTML).
+
+**Evidence (logs/probes first):** live `/api/library/songs` → **404, 8247 B** = surge's HTML error
+page, which `api.js` reads as the response body and `library.js:59` renders verbatim. Live
+`/library` → **404** too: `web/` has `index.html` but no `200.html`, so surge has no SPA fallback.
+Backend `:8000` is down (connection refused); the app fetches `/api/*` **relative to its own
+origin** = the surge domain, which has no API. CORS on the backend is already `origin: true`
+(`back/src/server.ts:143`), so a cross-origin API base will work once the backend is reachable.
+
+**Approach (user chose "Both"):**
+1. `web/src/config.js` — `export const API_BASE = ''` (`''` = same origin; set to the public
+   backend origin when it has one). `api.js` prefixes every fetch with it; `x-user-id` rule still
+   keyed on the raw `/api/library` path.
+2. `api.js` hardening — if a non-2xx response body looks like an HTML page (starts with
+   `<!doctype`/`<html`), never pass it to the UI: `errorText()` returns a short message naming the
+   cause (status + "got an HTML page instead of JSON — API base wrong?"). This kills the "strange
+   code" for good, whatever the 404 source.
+3. SPA fallback — write `web/200.html` (byte-copy of `index.html`) and have the workflow
+   `cp index.html 200.html` before publishing, so deep links stop 404ing on surge.
+4. Verify: local static server serving `web/` **with** `200.html` fallback + a mock API (same
+   origin, then cross-origin with CORS) → happy path, deep link `/library` → 200, API 404 →
+   friendly one-liner, `API_BASE` cross-origin → requests hit the mock. Nothing committed (rule 5).
+
+### RESULT — surge site fixed: `API_BASE` config, HTML-404 sanitizing, `200.html` fallback
+
+**Done, nothing committed (rule 5).** Four changes under `web/`:
+
+1. **`src/config.js` (new)** — `export const API_BASE = ''`; `api.js` now fetches
+   `` `${API_BASE}${path}` ``. Set it to the backend's public origin when there is one (backend
+   already has `origin: true` CORS, incl. the `x-user-id` header). The `x-user-id` rule still keys
+   on the raw `/api/library` path, not the prefixed URL.
+2. **`src/api.js` — `errorText()` hardened**: a body starting with `<!doctype`/`<html` is never
+   shown — replaced by `404 Not Found: got an HTML page instead of JSON — is API_BASE
+   (src/config.js) pointing at the backend?`; plain-text backend errors pass through unchanged;
+   bodies >300 chars are truncated; empty body → `status statusText`. This one funnel
+   (`store.js` → `errorText`) feeds every page, so the "strange code" is gone everywhere.
+3. **`200.html` (new)** — byte-copy of `index.html` (same sha1 `6dfcd9b…`), so surge serves the
+   SPA on deep links; workflow step renamed **"Write CNAME and 200.html"** and now also does
+   `cp index.html 200.html` before publishing (stays in sync automatically).
+4. Nothing else changed; `package.json`/`styles.css`/pages untouched.
+
+**Diagnosis (probes first):** live `https://simple3453t3fg4344.surge.sh/api/library/songs` →
+**404, 8247 B** = surge's HTML error page, rendered verbatim by `library.js:59` — that was the
+pasted "strange code". Live `/library` → **404** (no `200.html` on the site) — the console 404s
+were the 15 s API poll + deep links. Backend `:8000` was down (connection refused), and the app
+fetched `/api/*` relative to its own origin = the surge domain.
+
+**Verified** with a local surge-mimic server (static + `200.html` fallback + surge-shaped HTML
+404 on `/api`) and a cross-origin mock API with CORS, driving the **real `src/api.js`** in Node:
+`/` → 200, `/library` deep link → **200** (fallback), `/api/*` → 404 HTML;
+`errorText` suite **7/7** (no doctype leaks, cause named, plain text intact, truncation, empty
+body); with `API_BASE` → mock origin (temporarily set, then reverted to `''`): JSON fetch works,
+`x-user-id` travels, HTML 404 still sanitized — **3/3**. Preflight `OPTIONS` → 204 with
+`Access-Control-Allow-Headers: content-type,x-user-id`. Workflow YAML parses. Servers stopped.
+
+**Not fixed here (out of scope, flagged):** the site still has no reachable backend — set
+`API_BASE` in `src/config.js` once the backend has a public URL, or the app will keep showing the
+new (now friendly) "got an HTML page instead of JSON" message on surge.
+
 ## 2026-10-09 — PLAN (rule 1): `HOSTING_DEPLOYMENT_URL` is the only domain source
 
 **Request:** there is no `SURGE_DOMAIN` key in `.env` at all — remove it; the domain comes only
