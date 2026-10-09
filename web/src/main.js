@@ -1,4 +1,4 @@
-import { getResource, refresh, setRenderer, state, switchUser } from './store.js';
+import { getResource, setRenderer, state, switchUser } from './store.js';
 import { esc } from './ui.js';
 import { installLinkHandler, setNavigateHandler } from './router.js';
 import { renderLibrary } from './pages/library.js';
@@ -115,6 +115,3 @@ setNavigateHandler(render);
 installLinkHandler();
 
 render();
-setInterval(() => {
-  if (!document.hidden) refresh();
-}, 15_000);

@@ -24,22 +24,11 @@ export function Shell({ children }: { children: ReactNode }) {
     if (users) setUsers(users);
   }, [users, setUsers]);
 
-  // Polls while the tab is visible. A pending import or a shared playlist must surface without the
-  // user reloading, and 15s is frequent enough for "I just shared it with myself in another window"
-  // without hammering the API.
-  const refresh = api.refresh;
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (typeof document !== 'undefined' && !document.hidden) refresh();
-    }, 15_000);
-    return () => clearInterval(timer);
-  }, [refresh]);
-
   const onSwitch = (value: number) => {
     session.switchTo(value);
     // The badge counts and every list resource key off userId, but notifications do not, so a
     // forced refresh keeps the header honest the moment you switch.
-    refresh();
+    api.refresh();
   };
 
   return (

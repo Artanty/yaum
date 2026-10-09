@@ -7,6 +7,78 @@ Current thread only. Prior sessions: `DECISIONS-archive.md`.
 workflow rounds), and archived on 2026-10-09: the React port (2026-10-07) and the header-styles fix
 (2026-10-08). This file holds the Surge static-deploy probe.)*
 
+### RESULT (rule 2): periodic refresh removed from all three frontends
+
+**Done, nothing committed (rule 5 — user did not ask this time).** Timer blocks deleted at the
+three grep-found sites: `web/src/main.js` (the trailing `setInterval(refresh, 15_000)`; `refresh`
+also dropped from its import — now unused there, pages still import it themselves),
+`web-react/src/layout/Shell.tsx` (poll `useEffect` + comment; `onSwitch` re-pointed from the
+removed local `refresh` binding to `api.refresh()`), `web-angular/src/app/layout/shell.ts`
+(second `effect` with `onCleanup` + comment; first effect for the user list untouched; Angular's
+`onSwitch` already called `this.api.refresh()` directly). Stale comments fixed so they don't
+describe a poll that no longer exists: `web-react/src/core/useResource.ts` (15s-poll blanking
+line + "the poll is retrying"), `web-react/src/core/library-api.tsx:129` ("shell's 15s poll holds
+this in an effect"), `web-angular/.../playlist-detail.ts` ("the 15s poll is retrying").
+`refresh()` itself kept everywhere — mutations (user switch, playlist edits, matches) still call it.
+**Verified:** grep shows zero `setInterval` and zero `15s|15_000` in all three src trees;
+`web-react`: `npm test` 42/42 pass + `tsc --noEmit` clean; `web-angular`: `npm run build` clean
+(bundle in `dist/app`); `web` (vanilla): `main.js` imports without SyntaxError (runtime stops at
+`localStorage is not defined`, expected outside a browser).
+
+## 2026-10-09 — PLAN (rule 1): commit poll-removal; rename web→web-vanilla, web-react→web; react workflow ← vanilla pattern
+
+**Requests (one message):** "commit changes." / "move current web folder → web-vanilla" /
+"move web-react to web" / "update react gh action according to work made for vanilla".
+
+**Steps:**
+1. Commit the outstanding poll-removal changes (vanilla/react/angular + this log) — explicitly
+   asked, so allowed (rule 5). Message in the repo's `-d;` style.
+2. `git mv web web-vanilla` then `git mv web-react web` (tracked renames, history follows).
+   Pre-checked: nothing outside DECISIONS references `web-react/`; `githooklib` reads
+   `web/package.json` and still finds one after the swap (version source changes: react's 0.0.9);
+   root `.gitignore`/comments still true.
+3. React gets the same prod API-base treatment vanilla got, because the workflow's `BACK_URL`
+   injection needs a target and the deployed site must not call surge's `/api` (the HTML-404 bug):
+   - new `web/src/config.ts`: `export const API_BASE = '';` (dev default `''` = vite proxy) —
+     line format kept identical so the same sed pattern works on `.ts`;
+   - `web/src/core/http.ts`: import it, `normalizeBase()` (vanilla's logic) prefixed in
+     `fetch(\`${BASE}${path}\`)`; `errorText()` gains the HTML-detect + 300-char truncation
+     hardening from vanilla's `api.js`;
+   - extend `http.spec.ts` for normalizeBase/HTML/truncation; `BASE=''` keeps every existing
+     fetch-URL assertion passing.
+4. Rewrite `web/.github/workflows/deploy-surge.yml` (replaces the 240-line expect/secrets/.env-
+   commit version entirely): checkout → Read .env (HOSTING_DEPLOYMENT_URL→domain, SURGE_TOKEN,
+   BACK_URL; each missing → `::error`+exit 1) → setup-node+npm ci → **Inject BACK_URL into
+   src/config.ts (before build so vite bakes it in)** → `npm run build` → CNAME + `200.html`
+   into `dist/` → `npm install -g surge` → `surge ./dist "$SURGE_DOMAIN" --token "$SURGE_TOKEN"`.
+   `permissions: contents: read`; no expect driver, no secrets, no .env commit-back.
+   `.env.example` → the three new keys.
+5. Verify: YAML parses; extracted steps run against a temp copy (env cases + inject rewrite);
+   in-tree: inject → `npm run build` → grep the URL out of `dist/` → restore `config.ts`;
+   `npm test`, `tsc --noEmit`.
+6. RESULT entry afterwards. Flag: DECISIONS.md is now ~580 lines, far past the ~250 threshold
+   (rule 4) — recommend archiving. Flag to user: vite dev proxy still defaults to
+   `127.0.0.1:8000` while back/.env says 3218 (PLST_API overrides). Leave the rename/workflow
+   changes uncommitted — the "commit" instruction preceded them (rule 5).
+
+## 2026-10-09 — PLAN (rule 1): remove the periodic 15s refresh from all three frontends
+
+**Request:** stop the page auto-refreshing on a timer (it keeps making requests); apply to
+`web/` (vanilla), `web-react/`, `web-angular/`.
+
+**Sites found (grep, not guessed):**
+- `web/src/main.js:118-121` — `setInterval(refresh, 15_000)` at file bottom
+- `web-react/src/layout/Shell.tsx:29-37` — `useEffect` + `setInterval` + rationale comment
+- `web-angular/src/app/layout/shell.ts:30-37` — `effect(onCleanup)` + `setInterval` + comment
+
+**Approach:** delete exactly those timer blocks. `refresh()` stays — it is still called by
+mutations (user switch `onSwitch`, playlist edits, matches) and those must keep working. Fix the
+comments that describe the poll as live behaviour (`web-react/src/core/library-api.tsx:129`
+"the shell's 15s poll…", `useResource.ts` "a 15s poll never blanks the screen") so they don't
+lie afterwards. Verify: no `setInterval` left in the three src trees; `npm test` + lint in
+web-react/web-angular if available; vanilla app served locally still renders. Nothing committed
+unless asked (rule 5).
+
 ## 2026-10-09 — PLAN (rule 1): run the backend on port 3218
 
 **Request:** backend must work on port 3218; do NOT touch the Postman collection (its

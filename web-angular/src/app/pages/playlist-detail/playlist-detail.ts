@@ -54,7 +54,7 @@ export class PlaylistDetailPage {
 
   /**
    * Latches this resource's error. httpResource clears `error` the instant a refetch starts, so the
-   * template cannot tell "first load, nothing yet" from "the 15s poll is retrying a playlist that
+   * template cannot tell "first load, nothing yet" from "the refetch is retrying a playlist that
    * 404s" — and the second one re-renders through the empty branch and back inside a single
    * change-detection pass, which Angular reports as NG0100 (and the user sees as a flicker).
    * A later success wins: playlist() is checked first in the template, so this only shows while

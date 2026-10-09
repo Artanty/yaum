@@ -126,7 +126,7 @@ export function LibraryApiProvider({ children }: { children: ReactNode }) {
   const { userId } = session;
 
   const [reloadTick, setReloadTick] = useState(0);
-  // Stable: the shell's 15s poll holds this in an effect and must not re-arm the timer on render.
+  // Stable: callers hold this in effects/deps and must not see its identity change between renders.
   const refresh = useCallback(() => setReloadTick((n) => n + 1), []);
 
   const [query, setQuery] = useState('');

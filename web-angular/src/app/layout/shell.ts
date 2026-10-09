@@ -24,16 +24,6 @@ export class Shell {
       const users = this.api.usersResource.value()?.users;
       if (users) this.session.setUsers(users);
     });
-
-    // Polls while the tab is visible. A pending import or a shared playlist must surface without the
-    // user reloading, and 15s is frequent enough for "I just shared it with myself in another window"
-    // without hammering the API.
-    effect((onCleanup) => {
-      const timer = setInterval(() => {
-        if (typeof document !== 'undefined' && !document.hidden) this.api.refresh();
-      }, 15_000);
-      onCleanup(() => clearInterval(timer));
-    });
   }
 
   protected onSwitch(event: Event): void {

@@ -7,9 +7,9 @@ import { apiFetch, errorText } from './http';
  *
  * Two details are load-bearing and are deliberately NOT what a naive fetch hook does:
  *
- * - `data` survives a refetch, so a 15s poll never blanks the screen;
+ * - `data` survives a refetch, so a refresh (user switch, post-mutation) never blanks the screen;
  * - `error` survives a refetch *start*. A hook that clears `error` the moment it refetches cannot
- *   tell "first load, nothing yet" from "the poll is retrying something that 404s", and the second
+ *   tell "first load, nothing yet" from "the refetch is retrying something that 404s", and the second
  *   one re-renders through the empty branch and back — a flicker, and (in Angular) an NG0100.
  *   A later success clears it.
  */
