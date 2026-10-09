@@ -2,20 +2,18 @@ name: Deploy web to Surge
 
 # This file lives in web/.github/ on purpose: GitHub only runs workflows from the
 # repo-root .github/workflows, so it executes in the "slave" repo that receives
-# web/ at its root. At run time the checkout IS the contents of web/, which is
-# why the publish target below is "." (the repo root).
+# web/ at its root. The checkout IS the site; the publish target is "./".
 on:
   push:
     branches: [main]
 
-# Nothing is pushed back (no domain is committed), so read-only is enough.
 permissions:
   contents: read
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    name: Publish to Surge
+    name: Deploying to surge
     # The surge CLI is known to stall after a successful upload on some
     # networks; a hard cap keeps a hang from burning the 6h default.
     timeout-minutes: 15
@@ -23,52 +21,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The domain is required: no SURGE_DOMAIN -> fail, no deploy.
-      - name: Resolve SURGE_DOMAIN from .env
+      # .env is the only source: HOSTING_DEPLOYMENT_URL (full URL ->
+      # https://my-app.surge.sh/ becomes my-app.surge.sh) and SURGE_TOKEN.
+      # Either missing -> fail.
+      - name: Read .env file
+        id: env
         run: |
-          # Read KEY=value out of the root .env without ever echoing a value.
-          env_get() {
-            [ -f .env ] || { printf ''; return 0; }
-            grep -E "^$1=" .env | head -1 | cut -d '=' -f2- | tr -d '\r' || true
-          }
-
-          SURGE_DOMAIN="$(env_get SURGE_DOMAIN | tr -d '[:space:]\"')"
+          SURGE_DOMAIN=$(grep '^HOSTING_DEPLOYMENT_URL=' .env 2>/dev/null | head -1 | cut -d '=' -f2- | tr -d '\r[:space:]"' \
+            | sed -E 's#^[a-zA-Z]+://##; s#/.*$##')
+          SURGE_TOKEN=$(grep '^SURGE_TOKEN=' .env 2>/dev/null | head -1 | cut -d '=' -f2- | tr -d '\r[:space:]"')
 
           if [ -z "$SURGE_DOMAIN" ]; then
-            echo "::error title=Surge deploy failed::SURGE_DOMAIN is missing/empty in .env; refusing to deploy."
-            if [ -f .env ]; then
-              echo ".env is present; key names: $(grep -oE '^[A-Za-z_]+' .env | sort -u | tr '\n' ' ')"
-            else
-              echo ".env is NOT in the checkout."
-            fi
+            echo "::error title=Surge deploy failed::HOSTING_DEPLOYMENT_URL is missing/empty in .env; refusing to deploy."
             exit 1
           fi
-
-          echo "SURGE_DOMAIN=$SURGE_DOMAIN" >> "$GITHUB_ENV"
-          echo "SURGE_DOMAIN is set -> will publish the repo root to $SURGE_DOMAIN"
-
-      - name: Write the CNAME file
-        run: |
-          printf '%s\n' "$SURGE_DOMAIN" > CNAME
-          echo "CNAME written: $(cat CNAME)"
-
-      - name: Install surge
-        run: npm install -g surge
-
-      - name: Publish the repo root to Surge
-        run: |
-          env_get() {
-            [ -f .env ] || { printf ''; return 0; }
-            grep -E "^$1=" .env | head -1 | cut -d '=' -f2- | tr -d '\r' || true
-          }
-
-          SURGE_TOKEN="$(env_get SURGE_TOKEN)"
           if [ -z "$SURGE_TOKEN" ]; then
             echo "::error title=Surge deploy failed::SURGE_TOKEN is missing/empty in .env; refusing to deploy."
             exit 1
           fi
-          export SURGE_TOKEN
 
-          echo "Publishing the repo root ('.') to $SURGE_DOMAIN"
-          surge . "$SURGE_DOMAIN"
-          echo "::notice title=Surge deploy::Published the repo root to https://$SURGE_DOMAIN"
+          echo "SURGE_DOMAIN=$SURGE_DOMAIN" >> "$GITHUB_OUTPUT"
+          echo "SURGE_TOKEN=$SURGE_TOKEN" >> "$GITHUB_OUTPUT"
+
+      # surge serves the SPA fallback from `200.html`; CNAME names the domain.
+      - name: Write CNAME
+        run: echo "${{ steps.env.outputs.SURGE_DOMAIN }}" > CNAME
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm install -g surge
+
+      - name: Publish to surge
+        env:
+          SURGE_DOMAIN: ${{ steps.env.outputs.SURGE_DOMAIN }}
+          SURGE_TOKEN: ${{ steps.env.outputs.SURGE_TOKEN }}
+        run: surge ./ "$SURGE_DOMAIN" --token "$SURGE_TOKEN"

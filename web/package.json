@@ -1,6 +1,6 @@
 {
   "name": "plst-web",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "scripts": {},
   "private": true,
   "packageManager": "npm@10.8.2",

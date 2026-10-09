@@ -7,6 +7,41 @@ Current thread only. Prior sessions: `DECISIONS-archive.md`.
 workflow rounds), and archived on 2026-10-09: the React port (2026-10-07) and the header-styles fix
 (2026-10-08). This file holds the Surge static-deploy probe.)*
 
+## 2026-10-09 — PLAN (rule 1): `HOSTING_DEPLOYMENT_URL` is the only domain source
+
+**Request:** there is no `SURGE_DOMAIN` key in `.env` at all — remove it; the domain comes only
+from `HOSTING_DEPLOYMENT_URL`. RESULT below.
+
+### RESULT — `HOSTING_DEPLOYMENT_URL` is the only domain source
+
+**Done, nothing committed (rule 5).** The `Read .env file` step no longer looks at `SURGE_DOMAIN`
+at all: it greps `HOSTING_DEPLOYMENT_URL` (scheme/quotes/whitespace/path stripped → bare host)
+and `SURGE_TOKEN` only. Missing URL → `::error …HOSTING_DEPLOYMENT_URL is missing/empty in .env`
++ exit 1; missing token → fail likewise. Remaining `SURGE_DOMAIN` mentions in the workflow are
+the internal output/step variable name (derived from the URL), not a `.env` key.
+**Verified** (YAML parses; extracted steps, `${{ }}` substituted like Actions): no `.env` → fail;
+`.env` without the URL key → fail; no token → fail; URL only → `SURGE_DOMAIN=my-app.surge.sh`,
+`CNAME=[my-app.surge.sh]`, fake surge `./ my-app.surge.sh --token tok123` exit 0; a stray
+`SURGE_DOMAIN=` key in `.env` is ignored (URL wins).
+
+## 2026-10-09 — PLAN (rule 1): accept the domain from `HOSTING_DEPLOYMENT_URL` too
+
+**Request:** the `.env` will also carry the domain as `HOSTING_DEPLOYMENT_URL` (a full URL, not
+a bare host). Update the "Read .env file" step: prefer `SURGE_DOMAIN`; if empty, derive the bare
+hostname from `HOSTING_DEPLOYMENT_URL` (strip scheme, path, trailing slash, whitespace/quotes).
+Token still `SURGE_TOKEN`; no domain from either key → fail. RESULT below.
+
+### RESULT — `HOSTING_DEPLOYMENT_URL` accepted as a domain source
+
+**Done, nothing committed (rule 5).** The "Read .env file" step now falls back to
+`HOSTING_DEPLOYMENT_URL` when `SURGE_DOMAIN` is empty: strips scheme/`tr -d` quotes/whitespace
+and everything from the first `/`, so `" https://my-app.surge.sh/ "` → `my-app.surge.sh`.
+`SURGE_DOMAIN` still wins when both are present. Error text updated to name both keys.
+**Verified** (YAML parses; extracted steps + `${{ }}` substitution like Actions, fake `.env`):
+no `.env` → fail; neither domain key → fail; no token → fail; only `HOSTING_DEPLOYMENT_URL` →
+`SURGE_DOMAIN=my-app.surge.sh` + `CNAME=[my-app.surge.sh]`; both keys → explicit one wins;
+full publish with fake surge → `surge ./ my-app.surge.sh --token tok123`, exit 0.
+
 ## 2026-10-09 — PLAN (rule 1): simplify `web/.github/workflows/deploy-surge.yml` → domain required, CNAME, deploy
 
 **Request:** 1) no domain in envs → stop and **fail** the deploy (no placeholder branch);
@@ -40,6 +75,18 @@ fail listing key names; valid domain → resolve, `CNAME=my-app.surge.sh`, fake 
 dismissed: `https://…surge.sh/` in `.env` passes through unstripped — same as the old behavior.
 
 `DECISIONS.md` is at ~250 lines — flag for trimming/archiving (rule 4).
+
+## 2026-10-09 — PLAN (rule 1): make auth visible with `--token`; mirror the `read` project's short workflow
+
+**Request:** the current publish step hides auth (`export SURGE_TOKEN`) — pass the token
+explicitly like `~/server/read/web/.github/workflows/deploy-surge.yml` does (`surge ./ <domain>
+--token <token>`), and simplify the file.
+
+**Approach:** rewrite `web/.github/workflows/deploy-surge.yml` in the `read` shape: one "Read
+.env" step (grep `SURGE_DOMAIN`/`SURGE_TOKEN`, write both to `$GITHUB_OUTPUT`, fail if either is
+empty), setup-node, `npm install -g surge`, one `surge ./ $domain --token $token` run. Keep our
+extra guardrails: write `CNAME` before publishing, quote/trim values, keep the timeout and the
+checkout at v4. RESULT below.
 
 ## 2026-10-09 — PLAN (rule 1): drop repo-secret overrides from the surge workflow
 
