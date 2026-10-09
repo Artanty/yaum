@@ -1,6 +1,0 @@
-.git
-node_modules
-src
-*.ts
-*.scss
-*.spec.ts

@@ -1,23 +1,6 @@
-# Keep the published set to real site content.
-#
-# surge's built-in ignore (surge-ignore) already drops `.git`, every dotfile or
-# dot-directory (which covers `.env`, `.env.*`, `.github`, `.gitignore`,
-# `.surgeignore` and `.DS_Store`) and `node_modules`. The entries below are the
-# non-dotfile leftovers we never want to serve.
-#
-# `CNAME` is intentionally NOT ignored: the workflow writes it (from
-# SURGE_DOMAIN) before every publish, so surge sees the same domain identity
-# it would write on success.
-.github
-.env
-.env.*
-*.md
-*.sh
-README.md
-
-# Explicit belt-and-braces (already covered by the built-in `.*` rule).
 .git
-.gitignore
-.surgeignore
-.DS_Store
 node_modules
+src
+*.ts
+*.scss
+*.spec.ts

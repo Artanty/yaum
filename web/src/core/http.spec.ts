@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, apiFetch, errorText } from './http';
+import { ApiError, apiFetch, errorText, normalizeBase } from './http';
 
 const fetchMock = vi.fn();
 
@@ -115,5 +115,41 @@ describe('errorText', () => {
   it('passes plain errors and non-errors through', () => {
     expect(errorText(new Error('boom'))).toBe('boom');
     expect(errorText('weird')).toBe('weird');
+  });
+
+  it('never shows an HTML body — surge answers missing paths with its own 404 page', () => {
+    expect(errorText(new ApiError(404, 'Not Found', '<!DOCTYPE html>\n<html><body>Surge</body></html>'))).toBe(
+      '404 Not Found: got an HTML page instead of JSON — is API_BASE (src/config.ts) pointing at the backend?',
+    );
+    expect(errorText(new ApiError(502, 'Bad Gateway', '  <html>cdn</html>  '))).toBe(
+      '502 Bad Gateway: got an HTML page instead of JSON — is API_BASE (src/config.ts) pointing at the backend?',
+    );
+  });
+
+  it('truncates a long body so a wall of text cannot fill the screen', () => {
+    const long = 'x'.repeat(500);
+    const shown = errorText(new ApiError(400, 'Bad Request', long));
+    expect(shown).toBe(`${'x'.repeat(300)}…`);
+  });
+});
+
+describe('normalizeBase', () => {
+  it('keeps an absolute URL, stripping only trailing slashes', () => {
+    expect(normalizeBase('https://api.example.com')).toBe('https://api.example.com');
+    expect(normalizeBase('https://api.example.com/')).toBe('https://api.example.com');
+    expect(normalizeBase('http://127.0.0.1:3218/')).toBe('http://127.0.0.1:3218');
+  });
+
+  it('repairs an http: value that lost its //', () => {
+    expect(normalizeBase('http:localhost:3218')).toBe('http://localhost:3218');
+  });
+
+  it('gives a scheme-less value http://', () => {
+    expect(normalizeBase('localhost:3218')).toBe('http://localhost:3218');
+  });
+
+  it("keeps '' as '' — same-origin is the dev default", () => {
+    expect(normalizeBase('')).toBe('');
+    expect(normalizeBase('   ')).toBe('');
   });
 });

@@ -7,8 +7,24 @@
  * dropdown — and the extension sends the identical header, so the browser and the scanner share
  * one server-side code path.
  */
+import { API_BASE } from '../config';
 
 const LIBRARY_PREFIX = '/api/library';
+
+/**
+ * The mirror of vanilla's `normalizeBase` (web-vanilla/src/api.js): an absolute URL passes
+ * through (trailing slashes stripped), `http:host` gets its `//` back, and a scheme-less value
+ * gets `http://`. Only `''` stays `''` — "same origin as this page" is the dev default.
+ */
+export function normalizeBase(base: string): string {
+  const value = String(base ?? '').trim();
+  if (!value) return '';
+  if (/^https?:\/\//i.test(value)) return value.replace(/\/+$/, '');
+  if (/^https?:/i.test(value)) return `${value.slice(0, value.indexOf(':') + 1)}//${value.slice(value.indexOf(':') + 1)}`;
+  return `http://${value}`.replace(/\/+$/, '');
+}
+
+const BASE = normalizeBase(API_BASE);
 
 export class ApiError extends Error {
   constructor(
@@ -37,7 +53,7 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
 
   let response: Response;
   try {
-    response = await fetch(path, {
+    response = await fetch(`${BASE}${path}`, {
       method: options.method ?? 'GET',
       headers,
       ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
@@ -57,11 +73,21 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
   return (text ? JSON.parse(text) : undefined) as T;
 }
 
-/** Turns the backend's plain-text 4xx bodies into something worth putting in the UI. */
+/**
+ * Turns the backend's plain-text 4xx bodies into something worth putting in the UI.
+ * A body that looks like an HTML page is never shown: static hosts (Surge) answer missing
+ * paths with their own branded 404 page, and dumping that markup into the app was the
+ * "could not load the library: <!DOCTYPE html>…" bug. Long bodies are truncated too.
+ */
 export function errorText(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 0) return 'cannot reach the plst server — is `npm start` running in back/?';
-    return err.body.trim() || `${err.status} ${err.statusText}`;
+    const body = (err.body || '').trim();
+    if (/^<(!doctype|html)/i.test(body)) {
+      return `${err.status} ${err.statusText}: got an HTML page instead of JSON — is API_BASE (src/config.ts) pointing at the backend?`;
+    }
+    if (!body) return `${err.status} ${err.statusText}`;
+    return body.length > 300 ? `${body.slice(0, 300)}…` : body;
   }
   return err instanceof Error ? err.message : String(err);
 }
