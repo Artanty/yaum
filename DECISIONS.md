@@ -54,6 +54,21 @@ http://localhost:3218".
    `tsc --noEmit` clean (config-only change, but cheap to confirm). RESULT below. The port change
    stays uncommitted — the "commit" instruction preceded it (rule 5).
 
+### RESULT — version work committed; dev proxies now default to :3218
+
+**Done.** (1) Committed the tag-version work as `a7930e7 "display build-time tag version in the
+web header"` (9 files: config.ts, VersionDisplay + spec, Shell.tsx, shell.scss, workflow,
+.env.example, DECISIONS.md; hook tagged as usual). (2) Dev-port change, **left uncommitted**
+(rule 5 — the "commit" instruction preceded it): `web/vite.config.ts` and
+`web-angular/proxy.conf.js` proxy defaults `http://127.0.0.1:8000` → `http://localhost:3218`
+(matches `back/.env` `PORT=3218` and `web-vanilla/src/config.js`, which already said 3218), and
+the stale "listens on 8000 by default" comments were fixed in both. `PLST_API`/`YAUM_API`
+overrides unchanged.
+**Verified:** angular `proxy.conf.js` loads and yields target `http://localhost:3218`;
+`web/` `npm test` 50/50 + `tsc --noEmit` clean; override precedence re-checked
+(`PLST_API` wins); no `:8000` reference left in either proxy config or the vanilla API base;
+`back/.env` still `PORT=3218`.
+
 ### RESULT (rule 2): tag version displayed in `web/` header (React)
 
 **Done, nothing committed (rule 5).** Mirrors `../stat/web`'s `VersionDisplay` (10px muted text in
