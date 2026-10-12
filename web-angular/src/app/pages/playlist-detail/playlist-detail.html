@@ -190,7 +190,7 @@
   </ol>
 }
 @if (showLoading()) {
-  <p class="muted">loading…</p>
+  <app-loader />
 } @else if (loadError(); as e) {
   <p class="err">could not load this playlist: {{ e.message }}</p>
 }

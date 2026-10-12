@@ -27,10 +27,11 @@
 
   <span class="stat" title="songs in the library">{{ librarySongs() }} songs</span>
 
-  <!-- No login yet: picking a user here IS the login, and the backend trusts the x-user-id header. -->
+  <!-- No login yet: picking a user here IS the login, and the backend trusts the x-user-id header.
+       Disabled until the users API answers — before that the dropdown has no options. -->
   <label class="switcher">
     <span class="sr">acting as</span>
-    <select [value]="session.userId()" (change)="onSwitch($event)">
+    <select [value]="session.userId()" [disabled]="!usersAnswered()" (change)="onSwitch($event)">
       @for (u of session.users(); track u.id) {
         <option [value]="u.id">{{ u.display_name || u.username }}</option>
       }
@@ -39,7 +40,16 @@
 </header>
 
 <main>
-  <router-outlet />
+  @if (usersAnswered()) {
+    <router-outlet />
+  } @else if (usersError()) {
+    <p class="load-err" role="alert">
+      could not load the user list: {{ usersError() }}
+      <button class="ghost" (click)="retryUsers()">retry</button>
+    </p>
+  } @else {
+    <app-loader label="loading the app…" />
+  }
 </main>
 
 @if (pendingImports() > 0) {

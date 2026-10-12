@@ -65,3 +65,44 @@ button {
 a {
   color: #1155cc;
 }
+
+/* The explicit loader (src/layout/Loader.tsx): spinner + label, used by the shell's users
+   gate, the pages' first-load branch, and the lazy route fallback. */
+.loader {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 18px 0;
+  color: #8b909b;
+  font-size: 13px;
+
+  .spinner {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    border: 2px solid #d3d7de;
+    border-top-color: #ffce00;
+    border-radius: 50%;
+    animation: loader-spin 0.7s linear infinite;
+  }
+}
+
+@keyframes loader-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loader .spinner {
+    animation: none;
+  }
+}
+
+/* The shell's users gate error line. Deliberately NOT `.err`: this file's rules are global and
+   hand-scoped `.shell .err` would out-specify the pages' own `.err` styling. */
+.load-err {
+  color: #b3261e;
+  font-size: 13px;
+  margin: 18px 0;
+}

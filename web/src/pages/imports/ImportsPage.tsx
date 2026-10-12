@@ -6,6 +6,7 @@ import { useResource } from '../../core/useResource';
 import { durationText, plural, timeAgo } from '../../core/format';
 import { errorText } from '../../core/http';
 import type { Song } from '../../core/models';
+import { Loader } from '../../layout/Loader';
 import './imports.scss';
 
 interface ImportDetailResponse {
@@ -101,7 +102,7 @@ export default function ImportsPage() {
       </section>
 
       {imports.loading ? (
-        <p className="muted">loading…</p>
+        <Loader />
       ) : (imports.data?.imports ?? []).length === 0 ? (
         <p className="muted">
           Nothing pending for <strong>{session.userId}</strong>. Scan a playlist in the extension
@@ -151,7 +152,7 @@ export default function ImportsPage() {
             </header>
 
             {detail.loading ? (
-              <p className="muted">loading tracks…</p>
+              <Loader label="loading tracks…" />
             ) : detail.error ? (
               <p className="err">could not load this import: {detail.error}</p>
             ) : (

@@ -1,5 +1,5 @@
-import { getResource, setRenderer, state, switchUser } from './store.js';
-import { esc } from './ui.js';
+import { getResource, refresh, setRenderer, state, switchUser } from './store.js';
+import { esc, loaderHtml } from './ui.js';
 import { installLinkHandler, setNavigateHandler } from './router.js';
 import { renderLibrary } from './pages/library.js';
 import { renderImports } from './pages/imports.js';
@@ -8,6 +8,12 @@ import { renderPlaylistDetail } from './pages/playlist-detail.js';
 import { renderNotifications } from './pages/notifications.js';
 
 const app = document.getElementById('app');
+
+// The users API is the app's identity source (who the switcher can act as), so page content
+// stays unavailable until it answers: #page shows the loader instead of the route, and the
+// switcher is disabled. This is a latched flag, NOT a `!data` check: refresh() wipes the store
+// cache, so data would go null on every mutation and re-blank the page.
+let usersSeen = false;
 
 function titleFor(path) {
   if (path.startsWith('/imports')) return 'Imports — plst';
@@ -58,7 +64,7 @@ function shellHtml() {
         <span class="stat">${me?.librarySongs ?? 0} songs</span>
         <label class="switcher">
           <span class="sr">acting as</span>
-          <select id="user-switch">
+          <select id="user-switch"${usersSeen ? '' : ' disabled'}>
             ${users
               .map(
                 (u) =>
@@ -89,7 +95,22 @@ function render() {
   const path = location.pathname;
   document.title = titleFor(path);
   app.innerHTML = shellHtml();
-  pageFor(path)(app.querySelector('#page'), path);
+
+  const usersRes = getResource('/api/library/users');
+  if (usersRes.data) usersSeen = true;
+  const pageEl = app.querySelector('#page');
+  if (!usersSeen) {
+    if (usersRes.error) {
+      pageEl.innerHTML = `<p class="load-err" role="alert">could not load the user list: ${esc(
+        usersRes.error,
+      )} <button id="retry-users" class="ghost">retry</button></p>`;
+      pageEl.querySelector('#retry-users')?.addEventListener('click', () => refresh());
+    } else {
+      pageEl.innerHTML = loaderHtml('loading the app…');
+    }
+  } else {
+    pageFor(path)(pageEl, path);
+  }
 
   app.querySelector('#user-switch')?.addEventListener('change', (event) => {
     switchUser(Number(event.target.value));

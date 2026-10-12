@@ -2,10 +2,11 @@ import { Component, computed, inject } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { LibraryApi } from '../../core/library-api';
 import { notificationText, timeAgo } from '../../core/format';
+import { Loader } from '../../layout/loader';
 
 @Component({
   selector: 'app-notifications-page',
-  imports: [RouterLink],
+  imports: [RouterLink, Loader],
   templateUrl: './notifications.html',
   styleUrl: './notifications.scss',
 })

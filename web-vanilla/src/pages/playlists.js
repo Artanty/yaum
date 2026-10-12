@@ -1,7 +1,7 @@
 import { apiFetch, errorText } from '../api.js';
 import { getResource, refresh, rerender, state } from '../store.js';
 import { plural, timeAgo } from '../format.js';
-import { esc } from '../ui.js';
+import { esc, loaderHtml } from '../ui.js';
 
 const page = { name: '', busy: false, message: null };
 
@@ -22,7 +22,7 @@ export function renderPlaylists(main) {
     </section>
     ${
       res.loading && !res.data
-        ? '<p class="muted">loading…</p>'
+        ? loaderHtml()
         : `
           <h2 class="section">Yours</h2>
           <ul class="list">

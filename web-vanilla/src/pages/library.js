@@ -1,7 +1,7 @@
 import { apiFetch, errorText } from '../api.js';
 import { getResource, refresh, rerender, state } from '../store.js';
 import { artistCredit, durationText, plural, timeAgo } from '../format.js';
-import { debounce, esc, qsa } from '../ui.js';
+import { debounce, esc, loaderHtml, qsa } from '../ui.js';
 
 export const PAGE = 50;
 
@@ -54,7 +54,7 @@ export function renderLibrary(main) {
 
   let body;
   if (songs.loading && !songs.data) {
-    body = '<p class="muted">loading…</p>';
+    body = loaderHtml();
   } else if (songs.error) {
     body = `<p class="err">could not load the library: ${esc(songs.error)}</p>`;
   } else {

@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useLibraryApi } from '../../core/library-api';
 import { notificationText, timeAgo } from '../../core/format';
+import { Loader } from '../../layout/Loader';
 import './notifications.scss';
 
 export default function NotificationsPage() {
@@ -33,7 +34,7 @@ export default function NotificationsPage() {
       </section>
 
       {data.loading ? (
-        <p className="muted">loading…</p>
+        <Loader />
       ) : items.length === 0 ? (
         <p className="muted">
           Nothing here. You get a notification when someone shares a playlist with you, or edits one

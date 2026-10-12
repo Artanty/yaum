@@ -6,7 +6,7 @@
 </section>
 
 @if (data.isLoading()) {
-  <p class="muted">loading…</p>
+  <app-loader />
 } @else if (items().length === 0) {
   <p class="muted">Nothing here. You get a notification when someone shares a playlist with you, or edits one you share.</p>
 } @else {

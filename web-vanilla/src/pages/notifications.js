@@ -1,7 +1,7 @@
 import { apiFetch } from '../api.js';
 import { getResource, refresh, state } from '../store.js';
 import { notificationText, timeAgo } from '../format.js';
-import { esc } from '../ui.js';
+import { esc, loaderHtml } from '../ui.js';
 
 export function renderNotifications(main) {
   const res = getResource('/api/library/notifications');
@@ -10,7 +10,7 @@ export function renderNotifications(main) {
 
   let body;
   if (res.loading && !res.data) {
-    body = '<p class="muted">loading…</p>';
+    body = loaderHtml();
   } else if (items.length === 0) {
     body =
       '<p class="muted">Nothing here. You get a notification when someone shares a playlist with you, or edits one you share.</p>';

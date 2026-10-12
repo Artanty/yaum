@@ -92,6 +92,86 @@ no such suffix and still beats showing nothing. Everything else (serve-only defi
 server — curl the transformed module and confirm `v1.0.14.0.0.17` with no `-g…` tail;
 `npm test` + `tsc --noEmit` still clean. RESULT below; nothing committed unless asked (rule 5).
 
+## 2026-10-12 — PLAN (rule 1): gate page content on the users API + explicit loader on pages (all 3 frontends)
+
+**Request:** "ui [should be] unavailable until users api answers. add explicit loader on pages."
+User chose **all three frontends** and **gate page content**: until `/api/library/users` answers,
+`<main>` shows an explicit loader instead of the page; the user switcher is disabled (no options
+yet); if the users call errors, show the error + a retry. Header brand/nav/badges stay visible.
+After the first answer the gate never re-blanks (users data survives refetches in all three).
+
+**Design (same look everywhere):** a `loader` element — CSS spinner + label, `role="status"`;
+`@media (prefers-reduced-motion: reduce)` stops the spin. Error line gets a `load-err` class
+(React needs a distinct name: hand-scoped `.shell .err` would out-specify the pages' own `.err`).
+
+**Per frontend:**
+1. `web/` (React): new `src/layout/Loader.tsx` (`label` prop, default "loading…") + `.loader`
+   styles in global `styles.scss`; `Shell.tsx` gates `<main>` on `api.users.data !== null`
+   (error branch = message + retry button calling `api.users.refetch()`), `select` gets
+   `disabled`; App.tsx Suspense fallback and the 5 pages' `loading…` paragraphs (incl. imports'
+   "loading tracks…") become `<Loader/>`. Specs: `Loader.spec.tsx` + a `Shell.spec.tsx` gate test
+   (deferred /users fetch: loader first, children after resolve, error+retry on reject).
+2. `web-angular/`: new standalone `src/app/layout/loader.ts` (inline template/styles, signal
+   `label` input, selector `app-loader`); `shell.html` gates `<main>` on
+   `usersResource.hasValue()` — `@if/@else` around `<router-outlet>` (verified safe: the router
+   activates the pending route when the outlet appears), error branch calls
+   `usersResource.reload()`; `select` disabled; loader added to shell + 5 pages' `imports`, the
+   pages' `loading…` paragraphs become `<app-loader/>`. Verify with `ng build` (strict template
+   check) + `ng test`.
+3. `web-vanilla/`: `ui.js` gains `loaderHtml(label)`; `styles.css` gains `.loader`/`.load-err`;
+   `main.js` renders the loader (or error + retry → `refresh()`) into `#page` instead of calling
+   the page renderer until the users entry has answered — via a module-level `usersSeen` flag,
+   because vanilla's `refresh()` **wipes the cache** and a `!data` check would re-blank on every
+   mutation; `select` disabled while unseen; the pages' `loading…` paragraphs become
+   `loaderHtml()`. Syntax-check via esbuild (no test infra there).
+
+**Verify:** React `npm test`/`tsc`/build; Angular `npm run build` + `ng test`; vanilla esbuild
+parse of every changed file; consistency grep. Nothing committed unless asked (rule 5). RESULT
+below.
+
+### RESULT — users gate + explicit loader, all three frontends
+
+**Done, nothing committed (rule 5).** Page content is now unavailable until
+`/api/library/users` answers; `<main>` shows an explicit spinner-loader (CSS spinner + label,
+`role="status"`, `prefers-reduced-motion` respected), the user switcher is disabled (no options
+yet), and a failed users call shows a `.load-err` line with a working retry. Header
+brand/nav/badges stay visible. Once answered, the gate never re-blanks (each frontend holds the
+answer the way its refetch model allows). The pages' bare `loading…` paragraphs (incl. imports'
+"loading tracks…") and the React lazy-route fallback became the same loader — one look, not a
+text line.
+
+- **`web/` (React):** new `src/layout/Loader.tsx` (label prop) + `.loader`/`.load-err` in global
+  `styles.scss`; `Shell.tsx` gates `<main>` on `api.users.data !== null` (error → alert +
+  `refetch()` retry), `select` gets `disabled`; `App.tsx` Suspense fallback and 5 pages swapped.
+  New specs: `Loader.spec.tsx` (2), `Shell.spec.tsx` (3: pending→loader+disabled switcher,
+  resolve→page+enabled, reject→alert+retry works). Fixed 2 test-infra gotchas again: RTL
+  auto-cleanup doesn't register without vitest `globals` (added `afterEach(cleanup)`), and a
+  module-level deferred promise leaks its settlement across tests (moved into `beforeEach`);
+  `toBeDisabled` isn't available without jest-dom → `.disabled` property. Used `fireEvent`
+  (`@testing-library/user-event` is not a dependency here).
+- **`web-angular/`:** new standalone `src/app/layout/loader.ts` (inline template/styles, signal
+  `label` input); `shell.html` gates `<main>` with `@if (usersAnswered()) { <router-outlet/> }
+  @else if (usersError()) … @else <app-loader/>` — verified against the installed router source
+  that a **late-created outlet activates the pending route** (`initializeOutletWithName` →
+  `activateWith`), so gating the outlet is safe; `shell.ts` gains `usersAnswered`/`usersError`
+  computeds + `retryUsers()` → `usersResource.reload()`; loader added to the 5 pages' `imports`.
+- **`web-vanilla/`:** `ui.js` gains `loaderHtml(label)`; `.loader`/`.load-err` appended to
+  `styles.css`; `main.js` renders the loader/error+retry (`refresh()`) into `#page` instead of
+  the page renderer until users answered — via a **latched `usersSeen` flag**, not a `!data`
+  check, because vanilla's `refresh()` wipes the store cache (a data check would re-blank every
+  mutation); `select` gets `disabled` while unseen; 5 page paragraphs swapped (the `<li class=
+  "muted">loading…</li>` inline in the song-picker row stays text — a spinner `<p>` inside a
+  list row would be wrong).
+
+**Verified:** `web/` `npm test` **60/60** (55 + 5 new), `tsc --noEmit` clean, `npm run build`
+clean; `web-angular/` `npm run build` clean (strict template check) + `ng test` **25/25**;
+`web-vanilla/` `node --check` on all 7 changed files + two jsdom smoke runs (jsdom borrowed from
+web/, scripts in the opencode temp dir): happy path — loader in `#page` and disabled switcher
+while `/users` pending → `.count` page content and enabled switcher after resolve; error path —
+`role="alert"` "could not load the user list" + no content after reject → retry button → content
+renders. Both OK. Consistency grep: no bare `muted">loading…` left except the deliberate
+vanilla `<li>`.
+
 ### RESULT — sha tail dropped from the dev version badge
 
 **Done, nothing committed (rule 5).** `devTagVersion()` in `web/vite.config.ts` now strips a

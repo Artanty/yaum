@@ -3,6 +3,7 @@ import { Link, NavLink } from 'react-router-dom';
 import './shell.scss';
 import { useLibraryApi } from '../core/library-api';
 import { useSession } from '../core/session';
+import { Loader } from './Loader';
 import { VersionDisplay } from './VersionDisplay';
 
 /** routerLinkActive="on" — a section stays lit on its detail pages too (`end` defaults to false). */
@@ -19,6 +20,11 @@ export function Shell({ children }: { children: ReactNode }) {
 
   const users = api.users.data?.users;
   const setUsers = session.setUsers;
+
+  // The users API is the app's identity source (who the switcher can act as), so page content
+  // stays unavailable until it answers: <main> shows the loader instead of the route. Once it
+  // has answered, `data` survives every refetch, so the gate never re-blanks the screen.
+  const usersAnswered = api.users.data !== null;
 
   // The user list is the switcher's options, so it has to be loaded before it can be rendered.
   useEffect(() => {
@@ -75,10 +81,15 @@ export function Shell({ children }: { children: ReactNode }) {
           {librarySongs} songs
         </span>
 
-        {/* No login yet: picking a user here IS the login, and the backend trusts the x-user-id header. */}
+        {/* No login yet: picking a user here IS the login, and the backend trusts the x-user-id header.
+            Disabled until the users API answers — before that the dropdown has no options. */}
         <label className="switcher">
           <span className="sr">acting as</span>
-          <select value={session.userId} onChange={(e) => onSwitch(Number(e.target.value))}>
+          <select
+            value={session.userId}
+            disabled={!usersAnswered}
+            onChange={(e) => onSwitch(Number(e.target.value))}
+          >
             {session.users.map((u) => (
               <option key={u.id} value={u.id}>
                 {u.display_name || u.username}
@@ -90,7 +101,20 @@ export function Shell({ children }: { children: ReactNode }) {
         <VersionDisplay />
       </header>
 
-      <main>{children}</main>
+      <main>
+        {usersAnswered ? (
+          children
+        ) : api.users.error ? (
+          <p className="load-err" role="alert">
+            could not load the user list: {api.users.error}{' '}
+            <button className="ghost" onClick={api.users.refetch}>
+              retry
+            </button>
+          </p>
+        ) : (
+          <Loader label="loading the app…" />
+        )}
+      </main>
 
       {pendingImports > 0 && (
         <div className="toast" role="status">

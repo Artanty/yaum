@@ -18,3 +18,8 @@ export function debounce(fn, ms) {
     timer = setTimeout(() => fn(...args), ms);
   };
 }
+
+/** The explicit loader (the twin of web/'s <Loader/>): spinner + label, announced as a status. */
+export function loaderHtml(label = 'loading…') {
+  return `<p class="loader" role="status"><span class="spinner" aria-hidden="true"></span>${esc(label)}</p>`;
+}

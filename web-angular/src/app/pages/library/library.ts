@@ -6,10 +6,11 @@ import { LibraryApi } from '../../core/library-api';
 import { errorText } from '../../core/interceptor';
 import { artistCredit, durationText, plural, timeAgo } from '../../core/format';
 import type { YoutubeExport } from '../../core/models';
+import { Loader } from '../../layout/loader';
 
 @Component({
   selector: 'app-library-page',
-  imports: [FormsModule],
+  imports: [FormsModule, Loader],
   templateUrl: './library.html',
   styleUrl: './library.scss',
 })

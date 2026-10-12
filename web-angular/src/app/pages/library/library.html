@@ -57,7 +57,7 @@
 </section>
 
 @if (songs.isLoading()) {
-  <p class="muted">loading…</p>
+  <app-loader />
 } @else if (songs.error()) {
   <p class="err">could not load the library: {{ songs.error()?.message }}</p>
 } @else {

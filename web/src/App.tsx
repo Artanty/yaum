@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { LibraryApiProvider } from './core/library-api';
 import { SessionProvider } from './core/session';
+import { Loader } from './layout/Loader';
 import { Shell } from './layout/Shell';
 
 const LibraryPage = lazy(() => import('./pages/library/LibraryPage'));
@@ -34,7 +35,7 @@ export function App() {
         <LibraryApiProvider>
           <DocumentTitle />
           <Shell>
-            <Suspense fallback={<p>loading…</p>}>
+            <Suspense fallback={<Loader label="loading the page…" />}>
               <Routes>
                 <Route path="/" element={<Navigate to="/library" replace />} />
                 <Route path="/library" element={<LibraryPage />} />

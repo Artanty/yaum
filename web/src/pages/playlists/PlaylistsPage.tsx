@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useLibraryApi } from '../../core/library-api';
 import { plural, timeAgo } from '../../core/format';
 import { errorText } from '../../core/http';
+import { Loader } from '../../layout/Loader';
 import './playlists.scss';
 
 export default function PlaylistsPage() {
@@ -52,7 +53,7 @@ export default function PlaylistsPage() {
       </section>
 
       {playlists.loading ? (
-        <p className="muted">loading…</p>
+        <Loader />
       ) : (
         <>
           <h2 className="section">Yours</h2>

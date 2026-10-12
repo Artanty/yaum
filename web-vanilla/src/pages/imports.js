@@ -1,7 +1,7 @@
 import { apiFetch, errorText } from '../api.js';
 import { getResource, refresh, rerender, state } from '../store.js';
 import { durationText, plural, timeAgo } from '../format.js';
-import { esc, qsa } from '../ui.js';
+import { esc, loaderHtml, qsa } from '../ui.js';
 import { navigate } from '../router.js';
 
 const page = {
@@ -22,7 +22,7 @@ export function renderImports(main) {
 
   let body;
   if (pending.loading && !pending.data) {
-    body = '<p class="muted">loading…</p>';
+    body = loaderHtml();
   } else if (list.length === 0) {
     body = `<p class="muted">Nothing pending for user ${state.userId}. Scan a playlist in the extension and press “Import to my library”, and it will show up here.</p>`;
   } else {
@@ -63,7 +63,7 @@ export function renderImports(main) {
 
 function drawer(detail) {
   if (detail.loading && !detail.data) {
-    return '<div class="overlay" data-close></div><section class="drawer"><p class="muted">loading tracks…</p></section>';
+    return `<div class="overlay" data-close></div><section class="drawer">${loaderHtml('loading tracks…')}</section>`;
   }
   if (detail.error) {
     return `<div class="overlay" data-close></div><section class="drawer"><p class="err">could not load this import: ${esc(

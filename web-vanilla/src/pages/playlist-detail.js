@@ -1,7 +1,7 @@
 import { apiFetch, errorText } from '../api.js';
 import { getResource, refresh, rerender, state } from '../store.js';
 import { artistCredit, durationText, timeAgo } from '../format.js';
-import { debounce, esc, qsa } from '../ui.js';
+import { debounce, esc, loaderHtml, qsa } from '../ui.js';
 import { navigate } from '../router.js';
 
 const page = {
@@ -32,7 +32,7 @@ export function renderPlaylistDetail(main, path) {
 
   const res = getResource(`/api/library/playlists/${id}`);
   if (res.loading && !res.data) {
-    main.innerHTML = '<p class="muted">loading…</p>';
+    main.innerHTML = loaderHtml();
     return;
   }
   if (res.error) {

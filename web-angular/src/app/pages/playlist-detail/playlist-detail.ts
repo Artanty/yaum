@@ -7,10 +7,11 @@ import { Session } from '../../core/session';
 import { errorText } from '../../core/interceptor';
 import { artistCredit, durationText, timeAgo } from '../../core/format';
 import type { Collaborator, PlaylistDetail, Song, YoutubeExport } from '../../core/models';
+import { Loader } from '../../layout/loader';
 
 @Component({
   selector: 'app-playlist-detail',
-  imports: [FormsModule, RouterLink],
+  imports: [FormsModule, RouterLink, Loader],
   templateUrl: './playlist-detail.html',
   styleUrl: './playlist-detail.scss',
 })

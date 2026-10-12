@@ -121,3 +121,11 @@ main {
     font-weight: 600;
   }
 }
+
+/* The users-gate error line. Named `.load-err` (not `.err`) to match web/ — the pages own
+   `.err` in their own scoped styles. */
+.load-err {
+  color: #b3261e;
+  font-size: 13px;
+  margin: 18px 0;
+}

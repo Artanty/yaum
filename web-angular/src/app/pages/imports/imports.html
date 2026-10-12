@@ -7,7 +7,7 @@
 </section>
 
 @if (imports.isLoading()) {
-  <p class="muted">loading…</p>
+  <app-loader />
 } @else if ((imports.value()?.imports ?? []).length === 0) {
   <p class="muted">
     Nothing pending for <strong>{{ sessionUser() }}</strong>. Scan a playlist in the extension and press
@@ -44,7 +44,7 @@
     </header>
 
     @if (detail.isLoading()) {
-      <p class="muted">loading tracks…</p>
+      <app-loader label="loading tracks…" />
     } @else if (detail.error()) {
       <p class="err">could not load this import: {{ detail.error()?.message }}</p>
     } @else {

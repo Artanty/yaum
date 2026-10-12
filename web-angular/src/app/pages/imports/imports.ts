@@ -8,10 +8,11 @@ import { Session } from '../../core/session';
 import { errorText } from '../../core/interceptor';
 import { artistCredit, durationText, plural, timeAgo } from '../../core/format';
 import type { Song } from '../../core/models';
+import { Loader } from '../../layout/loader';
 
 @Component({
   selector: 'app-imports-page',
-  imports: [FormsModule],
+  imports: [FormsModule, Loader],
   templateUrl: './imports.html',
   styleUrl: './imports.scss',
 })

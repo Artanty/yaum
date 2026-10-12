@@ -3,6 +3,7 @@ import { PAGE, useLibraryApi } from '../../core/library-api';
 import { artistCredit, durationText, plural, timeAgo } from '../../core/format';
 import { errorText } from '../../core/http';
 import type { YoutubeExport } from '../../core/models';
+import { Loader } from '../../layout/Loader';
 import './library.scss';
 
 export default function LibraryPage() {
@@ -243,7 +244,7 @@ export default function LibraryPage() {
       </section>
 
       {songs.loading ? (
-        <p className="muted">loading…</p>
+        <Loader />
       ) : songs.error ? (
         <p className="err">could not load the library: {songs.error}</p>
       ) : (

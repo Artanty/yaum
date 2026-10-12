@@ -6,6 +6,7 @@ import { useResource } from '../../core/useResource';
 import { artistCredit, durationText, timeAgo } from '../../core/format';
 import { errorText } from '../../core/http';
 import type { Collaborator, PlaylistDetail, Song, YoutubeExport } from '../../core/models';
+import { Loader } from '../../layout/Loader';
 import './playlist-detail.scss';
 
 export default function PlaylistDetailPage() {
@@ -477,7 +478,7 @@ export default function PlaylistDetailPage() {
   if (detail.loading) {
     return (
       <div className="page-playlist-detail">
-        <p className="muted">loading…</p>
+        <Loader />
       </div>
     );
   }

@@ -4,10 +4,11 @@ import { RouterLink } from '@angular/router';
 import { LibraryApi } from '../../core/library-api';
 import { errorText } from '../../core/interceptor';
 import { plural, timeAgo } from '../../core/format';
+import { Loader } from '../../layout/loader';
 
 @Component({
   selector: 'app-playlists-page',
-  imports: [FormsModule, RouterLink],
+  imports: [FormsModule, RouterLink, Loader],
   templateUrl: './playlists.html',
   styleUrl: './playlists.scss',
 })

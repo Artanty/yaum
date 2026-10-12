@@ -357,3 +357,43 @@ input[type='text'] {
   overflow: hidden;
   clip: rect(0 0 0 0);
 }
+
+/* The explicit loader (src/ui.js loaderHtml): spinner + label, used by the shell's users gate
+   and the pages' first-load branch. */
+.loader {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 18px 0;
+  color: #8b909b;
+  font-size: 13px;
+}
+
+.loader .spinner {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border: 2px solid #d3d7de;
+  border-top-color: #ffce00;
+  border-radius: 50%;
+  animation: loader-spin 0.7s linear infinite;
+}
+
+@keyframes loader-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loader .spinner {
+    animation: none;
+  }
+}
+
+/* The shell's users-gate error line — named to match web/ (pages own `.err`). */
+.load-err {
+  color: #b3261e;
+  font-size: 13px;
+  margin: 18px 0;
+}
