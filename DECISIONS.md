@@ -7,6 +7,88 @@ Current thread only. Prior sessions: `DECISIONS-archive.md`.
 workflow rounds), and archived on 2026-10-09: the React port (2026-10-07) and the header-styles fix
 (2026-10-08). This file holds the Surge static-deploy probe.)*
 
+## 2026-10-12 — PLAN (rule 1): display the tag version in `web/` (React), like `../stat/web`
+
+**Request:** "add feature to display tagversion. it is implemented in ../stat/web — make the same
+here." User chose scope **web/ only** and source **build-time env value** (no API fetch).
+
+**Reference (`../stat/web`):** `src/components/VersionDisplay.tsx` reads
+`process.env.TAG_VERSION || '0.0.0.0'` (Parcel inlines `process.env`), renders 10px muted text
+bottom-right of the header; mounted once in `StatPanel.tsx`. The value is supplied at build time
+(`stat/build/.env` has `TAG_VERSION=…`).
+
+**Approach (fitting yaum's existing pattern instead of Parcel's `process.env` magic — vite does
+not inline it, and `web/src/config.ts` is already the build-time-config file CI rewrites):**
+1. `web/src/config.ts` gains `export const TAG_VERSION = '0.0.0.0';` — committed dev default,
+   same load-bearing single-line format as `API_BASE` so the same sed-inject pattern works.
+2. New `web/src/layout/VersionDisplay.tsx`: small component rendering `TAG_VERSION` (fallback
+   `'0.0.0.0'`), muted 10px, like stat's.
+3. `web/src/layout/Shell.tsx` mounts it at the end of the header bar; `.version` style in
+   `shell.scss` (10px, `#8b909b`, bottom-aligned to echo stat's bottom-right placement).
+4. `web/.github/workflows/deploy-surge.yml`: *Read .env* also reads `TAG_VERSION`
+   (**optional** — a missing version must not break a deploy, unlike domain/token/BACK_URL) and a
+   new *Inject TAG_VERSION into src/config.ts* step pastes it over the literal before the build;
+   no key in `.env` → committed default ships and the step logs a notice. `.env.example` gains the
+   key.
+5. Tiny vitest spec for the component (renders the config value). Verify: `npm test`,
+   `tsc --noEmit`, `npm run build` (grep the version out of `dist/`), YAML parses + inject step
+   exercised against a temp copy. Nothing committed (rule 5). RESULT below.
+
+## 2026-10-12 — PLAN (rule 1): commit the version-display work; point the dev proxies at :3218
+
+**Requests (one message):** "1. commit changes. 2. update backend dev port to
+http://localhost:3218".
+
+**Steps:**
+1. Commit (explicitly asked, rule 5 exception) the tag-version work + its DECISIONS entries:
+   `web/src/config.ts`, `web/src/layout/{Shell.tsx,shell.scss,VersionDisplay.tsx,
+   VersionDisplay.spec.tsx}`, `web/.github/workflows/deploy-surge.yml`, `web/.env.example`,
+   `DECISIONS.md`. Plain imperative subject, no suffix (rule 6). The commit hook tags as usual.
+2. Backend dev port: `back/.env` already says `PORT=3218` and the server was verified on it
+   (2026-10-09), so the code change is only the **dev-proxy defaults** that still name 8000 —
+   `web/vite.config.ts:8` and `web-angular/proxy.conf.js` (`… || 'http://127.0.0.1:8000'` →
+   `'http://localhost:3218'`, with the stale "listens on 8000 by default" comments fixed).
+   `web-vanilla/src/config.js` already says `http://localhost:3218` — untouched. `PLST_API` /
+   `YAUM_API` overrides keep working.
+3. Verify: the proxy target resolves to :3218 in both configs; `web/` still `npm test` +
+   `tsc --noEmit` clean (config-only change, but cheap to confirm). RESULT below. The port change
+   stays uncommitted — the "commit" instruction preceded it (rule 5).
+
+### RESULT (rule 2): tag version displayed in `web/` header (React)
+
+**Done, nothing committed (rule 5).** Mirrors `../stat/web`'s `VersionDisplay` (10px muted text in
+the header corner reading `TAG_VERSION || '0.0.0.0'`), adapted to yaum's vite stack where
+`process.env.*` is **not** inlined — the value lives in `src/config.ts` (the file CI already
+rewrites for `BACK_URL`) instead:
+
+- `web/src/config.ts` — new `export const TAG_VERSION = '0.0.0.0';` (committed dev default; the
+  single-line format is load-bearing for the workflow's sed, like `API_BASE`) + doc comment.
+- `web/src/layout/VersionDisplay.tsx` (new) — renders `TAG_VERSION`, fallback `'0.0.0.0'`,
+  `title="app version"`; `web/src/layout/Shell.tsx` mounts it at the end of the header bar;
+  `.version` style in `shell.scss` (10px, `#8b909b`, `align-self: flex-end` → bottom-right like
+  stat's absolute placement, but wrap-safe).
+- `web/.github/workflows/deploy-surge.yml` — *Read .env* also reads `TAG_VERSION` as
+  **optional** (missing → `::notice` + committed default ships, unlike domain/token/BACK_URL
+  which still hard-fail) and a new **Inject TAG_VERSION into src/config.ts** step sed-replaces the
+  literal before `npm run build` (tmp+mv, BSD/GNU-safe; grep back or `::error`+exit 1).
+  `.env.example` gains the commented key.
+- New `web/src/layout/VersionDisplay.spec.tsx` — 2 tests (shows the config value; empty config →
+  `0.0.0.0` fallback via `vi.doMock`). Needed an explicit `afterEach(cleanup)`: the repo runs
+  vitest without `globals: true`, so RTL's auto-cleanup never registers (first test's DOM leaked
+  into the second on the first run).
+
+**Verified:** `npm test` **50/50** (48 before + 2 new); `tsc --noEmit` clean; `npm run build` clean
+and `0.0.0.0` found in `dist/assets/index-*.js` (baked in, not fetched); workflow YAML parses;
+both steps exercised against a **temp copy**: inject — normal tag, empty → skip keeping default,
+`& | \` ` characters escaped correctly, grep-back fails loudly if the line vanished; read —
+`.env` without `TAG_VERSION` → notice + empty output, with the key → `tag=[v9.9.9.9.9]`,
+required keys still hard-fail. Real `src/config.ts` left at the committed default (temp dirs
+removed). Browser preview served the built app but no desktop browser was connected for a visual
+check; the jsdom render tests cover the rendering. **Note:** the deployed badge is only as fresh
+as the `TAG_VERSION` value in the deploy `.env` — add `TAG_VERSION=<git tag>` to `web/.env` before
+deploys (the current tag is `v1.0.14.0.0.17`). **Flag (rule 4):** DECISIONS.md is ~700 lines, far
+past the ~250 threshold — recommend archiving.
+
 ### RESULT (rule 2): periodic refresh removed from all three frontends
 
 **Done, nothing committed (rule 5 — user did not ask this time).** Timer blocks deleted at the

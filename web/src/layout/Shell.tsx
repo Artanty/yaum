@@ -3,6 +3,7 @@ import { Link, NavLink } from 'react-router-dom';
 import './shell.scss';
 import { useLibraryApi } from '../core/library-api';
 import { useSession } from '../core/session';
+import { VersionDisplay } from './VersionDisplay';
 
 /** routerLinkActive="on" — a section stays lit on its detail pages too (`end` defaults to false). */
 const navClass = ({ isActive }: { isActive: boolean }) => (isActive ? 'on' : undefined);
@@ -85,6 +86,8 @@ export function Shell({ children }: { children: ReactNode }) {
             ))}
           </select>
         </label>
+
+        <VersionDisplay />
       </header>
 
       <main>{children}</main>
