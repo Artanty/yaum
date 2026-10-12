@@ -54,6 +54,86 @@ http://localhost:3218".
    `tsc --noEmit` clean (config-only change, but cheap to confirm). RESULT below. The port change
    stays uncommitted — the "commit" instruction preceded it (rule 5).
 
+## 2026-10-12 — PLAN (rule 1): show the real tag version in dev mode too
+
+**Bug report:** in `vite dev` the header badge reads `0.0.0.0` — expected, since only CI's inject
+step replaces the committed default in `src/config.ts`, and a dev server never runs that step.
+
+**Approach (vite-native, no API call):**
+1. `web/vite.config.ts` resolves a dev version at config time — `process.env.TAG_VERSION` if set,
+   else `git describe --tags --always` run from the repo root (`execSync`, try/catch → `''`) —
+   and exposes it to the app via `define: { 'import.meta.env.TAG_VERSION': … }`, **only when
+   `command === 'serve'` and `mode !== 'test'`**: prod keeps shipping the CI-injected config.ts
+   value (so a slave-repo checkout without tags can never bake a stray SHA into a deploy), and
+   vitest keeps a real `import.meta.env` it can stub.
+2. New `web/src/core/app-version.ts`: `appVersion()` — CI-injected `TAG_VERSION` wins unless it
+   is the `'0.0.0.0'` default, then the vite-provided dev value, then `'0.0.0.0'`.
+   `VersionDisplay` calls it instead of reading config directly.
+3. `src/config.ts` doc comment mentions the dev fallback; specs: app-version unit tests
+   (CI value wins / dev value / both absent → `0.0.0.0`, using `vi.mock` + `vi.stubEnv`) and the
+   existing VersionDisplay specs kept pointing at `appVersion`.
+4. Verify: `npm test`, `tsc --noEmit`, and against a **running dev server** — curl the transformed
+   `/src/core/app-version.ts` and confirm the git tag (`v1.0.14.0.0.17-2-g…`) is inlined; also
+   confirm `npm run build` does **not** inline it (serve-only define). RESULT below; nothing
+   committed unless asked (rule 5).
+
+## 2026-10-12 — PLAN (rule 1): drop the `-N-g<sha>` tail from the dev version badge
+
+**Request:** "remove sha tail" — the dev badge shows `v1.0.14.0.0.17-2-gbf34827`; user wants just
+the tag (`v1.0.14.0.0.17`).
+
+**Approach:** normalize inside `devTagVersion()` in `web/vite.config.ts` — strip a trailing
+`-<N>-g<sha>` (the `git describe` commits-since/suffix) with a regex, applied to **both** the
+`TAG_VERSION` env value and the `git describe --tags --always` output (an env value with a tail
+should read the same way). `--always`' bare-sha fallback (no tags reachable) stays as-is — it has
+no such suffix and still beats showing nothing. Everything else (serve-only define, CI path,
+`appVersion()` precedence) untouched.
+**Verify:** unit-style check of the regex against the real describe output + edge cases; live dev
+server — curl the transformed module and confirm `v1.0.14.0.0.17` with no `-g…` tail;
+`npm test` + `tsc --noEmit` still clean. RESULT below; nothing committed unless asked (rule 5).
+
+### RESULT — sha tail dropped from the dev version badge
+
+**Done, nothing committed (rule 5).** `devTagVersion()` in `web/vite.config.ts` now strips a
+trailing `-<commits>-g<sha>` from the value **before** it is defined — applied to both the
+`TAG_VERSION` env override and the `git describe --tags --always` output, so either source reads
+as the bare tag. The `--always` bare-sha fallback (no tags reachable) is unaffected — it has no
+such suffix. Serve-only define, CI inject path, and `appVersion()` precedence untouched;
+`app-version.spec.ts` fixtures updated from `v1.0.14.0.0.17-2-gbf34827` to `v1.0.14.0.0.17`.
+**Verified:** regex unit-checked 6/6 (with tail → stripped, bare tag unchanged, long sha stripped,
+short bare sha unchanged, a `-dirty`-style non-suffix left alone, numeric-version variant
+stripped); live `git describe` `v1.0.14.0.0.17-2-gbf34827` → `v1.0.14.0.0.17`; `npm test`
+**55/55**, `tsc --noEmit` clean; live dev server on :5199 — transformed
+`/src/core/app-version.ts` has the literal `"v1.0.14.0.0.17"` with no `-g…` tail anywhere in the
+module. **Reminder:** `vite` computes this at start — restart the dev server to pick up the new
+code (it already serves the stripped value, verified above).
+
+### RESULT — dev mode now shows the real tag version
+
+**Done, nothing committed (rule 5).** `vite dev` used to show the committed `'0.0.0.0'` default
+because only CI's inject step replaces it. Fixed without touching the CI path:
+
+- `web/vite.config.ts` — config is now a function of `{command, mode}`; a `devTagVersion()`
+  helper resolves `TAG_VERSION` from the env if set, else `git describe --tags --always` run from
+  the repo root (`execSync`, `cwd` derived from `import.meta.url`, try/catch → `''`), and exposes
+  it as `define: { 'import.meta.env.TAG_VERSION': … }` — **only when `command === 'serve'` and
+  `mode !== 'test'`**, so prod builds ship exactly what CI injected (a slave-repo checkout could
+  `git describe` a stray sha) and vitest keeps a stubbable real `import.meta.env`.
+- New `web/src/core/app-version.ts` — `appVersion()`: CI-injected `TAG_VERSION` wins unless it is
+  still the `'0.0.0.0'` default → vite dev value (also rejecting `'0.0.0.0'`) → `'0.0.0.0'`.
+  `VersionDisplay` now calls it; config.ts doc comment points at the dev fallback.
+- New `web/src/core/app-version.spec.ts` — 5 unit tests (CI wins over env; default/empty config →
+  dev value; both absent → `0.0.0.0`; dev value `'0.0.0.0'` treated as absent). Fixed one unused
+  import flagged by `noUnusedLocals`.
+
+**Verified:** `npm test` **55/55** (50 + 5); `tsc --noEmit` clean; `npm run build` clean and the
+dev tag (`1.0.14.0.0.17-2`) appears **nowhere** in `dist/` (grep, serve-only define confirmed);
+live dev server on :5199 — `curl /src/core/app-version.ts` (the transformed module) has
+`v1.0.14.0.0.17-2-gbf34827` inlined where `import.meta.env.TAG_VERSION` was. So `npm start` now
+shows `v1.0.14.0.0.17-2-gbf34827` (tag + commits-since + short sha) in the badge; prod still shows
+the CI-injected value. Note the dev value tracks HEAD at server start — restart `vite` after
+committing to refresh it.
+
 ### RESULT — version work committed; dev proxies now default to :3218
 
 **Done.** (1) Committed the tag-version work as `a7930e7 "display build-time tag version in the
@@ -67,7 +147,9 @@ overrides unchanged.
 **Verified:** angular `proxy.conf.js` loads and yields target `http://localhost:3218`;
 `web/` `npm test` 50/50 + `tsc --noEmit` clean; override precedence re-checked
 (`PLST_API` wins); no `:8000` reference left in either proxy config or the vanilla API base;
-`back/.env` still `PORT=3218`.
+`back/.env` still `PORT=3218`. **Update:** committed on request as `bf34827 "point the vite and
+angular dev proxies at the backend on port 3218"` (this edit is the only thing left
+uncommitted).
 
 ### RESULT (rule 2): tag version displayed in `web/` header (React)
 
